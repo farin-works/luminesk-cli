@@ -171,7 +171,7 @@ their control state and instance formats are not interchangeable.
 ```bash
 uv sync --locked --extra dev
 uv run python scripts/format.py --fix
-uv run mypy .
+uv run ty check .
 uv run pytest
 ```
 

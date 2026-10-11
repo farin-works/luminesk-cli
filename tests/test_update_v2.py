@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
 from luminesk_cli.application.install import TransactionalInstaller
 from luminesk_cli.application.locking import LockService
+from luminesk_cli.application.runtime import DockerRuntime
 from luminesk_cli.application.update import UpdateService
 from luminesk_cli.cli.commands import update as update_command
 from luminesk_cli.cli.commands.update import (
@@ -25,7 +27,7 @@ from luminesk_cli.domain.errors import (
     RuntimeOperationError,
     TransactionError,
 )
-from luminesk_cli.domain.instance import RuntimeState
+from luminesk_cli.domain.instance import InstanceState, RuntimeState
 from luminesk_cli.domain.lockfile import (
     Lockfile,
     RecipeLock,
@@ -87,17 +89,18 @@ command = ["./server.bin"]
     return recipe, manifest, lockfile, package
 
 
-class FailingThenRecoveringRuntime:
+class FailingThenRecoveringRuntime(DockerRuntime):
     def __init__(self, failed_package_digest: str) -> None:
+        super().__init__()
         self.failed_package_digest = failed_package_digest
         self.failure_seen = False
 
-    def status(self, root: Path):
+    def status(self, root: Path) -> InstanceState:
         state = load_state(root)
         assert state is not None
         return state
 
-    def stop(self, root: Path, *, remove: bool = False):
+    def stop(self, root: Path, *, remove: bool = False) -> InstanceState:
         del remove
         state = load_state(root)
         assert state is not None
@@ -108,8 +111,14 @@ class FailingThenRecoveringRuntime:
         write_state(root, stopped)
         return stopped
 
-    def start(self, root: Path, *, wait_for_readiness: bool = True):
-        del wait_for_readiness
+    def start(
+        self,
+        root: Path,
+        *,
+        input_overrides: Mapping[str, str | int | bool] | None = None,
+        wait_for_readiness: bool = True,
+    ) -> InstanceState:
+        del input_overrides, wait_for_readiness
         state = load_state(root)
         assert state is not None
 
@@ -244,7 +253,7 @@ def test_failed_readiness_restores_previous_running_instance(tmp_path: Path) -> 
     write_state(target, old_state)
     _, new_manifest, new_lock, new_package = make_release(tmp_path, "2.1.0", b"broken")
     runtime = FailingThenRecoveringRuntime(new_package.digest)
-    service = UpdateService(runtime=runtime)  # type: ignore[arg-type]
+    service = UpdateService(runtime=runtime)
     new_snapshot = create_recipe_snapshot(
         tmp_path / "recipe-2.1.0",
         new_manifest,
@@ -325,10 +334,10 @@ def update_lock(
     recipe_digest: str,
     artifact_version: str,
     artifact_digest: str,
-    kind: str = "github",
+    kind: Literal["database", "github", "local"] = "github",
 ) -> Lockfile:
     recipe = RecipeLock(
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         source=(
             "github:example/server"
             if kind == "github"

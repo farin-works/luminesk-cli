@@ -56,7 +56,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check production and tests
-        run: uv run mypy .
+        run: uv run ty check .
 
   tests:
     name: Tests (${{ matrix.name }})

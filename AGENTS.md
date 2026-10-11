@@ -132,7 +132,7 @@ uv sync --locked --extra dev
 
 - Follow PEP 8 and the repository's Ruff configuration. The configured target
   is Python 3.13 and the formatter line length is 88.
-- Add precise type annotations to changed code. Keep `mypy .` clean; avoid
+- Add precise type annotations to changed code. Keep `ty check .` clean; avoid
   unnecessary `Any`, casts, and untyped escape hatches.
 - Do not add `# noqa`, `# type: ignore`, blanket ignores, or weaker checking
   without a narrow, documented reason that is part of the requested task.
@@ -194,12 +194,12 @@ uv lock --check
 uv run python scripts/format.py
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy .
+uv run ty check .
 uv run pytest --strict-config --strict-markers -W error::ResourceWarning
 ```
 
 The format script and direct Ruff format check are intentionally both listed
-because CI runs both. Ruff validates style/imports and `mypy` validates typing;
+because CI runs both. Ruff validates style/imports and `ty` validates typing;
 neither replaces tests.
 
 If a required command cannot run because a tool, service, credential, network,
@@ -296,7 +296,7 @@ Before responding to the user:
 1. Confirm the final diff contains only task-related changes.
 2. Confirm new behavior has focused tests and affected documentation is
    accurate.
-3. Run the mandatory formatting, Ruff, mypy, and pytest gates plus applicable
+3. Run the mandatory formatting, Ruff, ty, and pytest gates plus applicable
    specialized gates.
 4. Check `git diff --check` and the working-tree status.
 5. Summarize changed files, observable behavior, validation results, and any
