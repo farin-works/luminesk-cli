@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 
 from luminesk_cli.domain.errors import ResolutionError, ValidationError
 from luminesk_cli.domain.primitives import validate_pinned_image
+from luminesk_cli.domain.progress import report_progress
 
 IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -33,6 +34,7 @@ class OciImageResolver:
         digests = self._inspect(image)
 
         if not digests and allow_pull:
+            report_progress("image")
             self._run(["docker", "pull", image])
             digests = self._inspect(image)
 

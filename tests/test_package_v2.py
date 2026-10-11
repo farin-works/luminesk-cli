@@ -7,6 +7,7 @@ from pathlib import Path
 from luminesk_cli.application.locking import LockService
 from luminesk_cli.domain.lockfile import Lockfile, ResolvedSource, RuntimeLock
 from luminesk_cli.domain.manifest import parse_manifest
+from luminesk_cli.domain.progress import ProgressEvent, observe_progress
 from luminesk_cli.infrastructure.build import DeclarativeBuilder
 from luminesk_cli.infrastructure.cache import ContentCache
 from luminesk_cli.infrastructure.oci import OciImageResolver
@@ -37,15 +38,18 @@ command = ["server"]
         runtime=RuntimeLock(image=manifest.runtime.image),
     )
 
-    package = DeclarativeBuilder(ContentCache(tmp_path / "cache")).build(
-        manifest,
-        lockfile,
-        recipe,
-        tmp_path / "image-only.lumineskpkg",
-    )
+    events: list[ProgressEvent] = []
+    with observe_progress(events.append):
+        package = DeclarativeBuilder(ContentCache(tmp_path / "cache")).build(
+            manifest,
+            lockfile,
+            recipe,
+            tmp_path / "image-only.lumineskpkg",
+        )
 
     assert package.metadata.files == ()
     assert verify_package(package.path).metadata.files == ()
+    assert events == [ProgressEvent("build"), ProgressEvent("verify")]
 
 
 def test_declarative_build_creates_verified_deterministic_package(

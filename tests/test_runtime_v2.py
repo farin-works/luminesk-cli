@@ -19,6 +19,7 @@ from luminesk_cli.domain.instance import (
 )
 from luminesk_cli.domain.lockfile import Lockfile, RuntimeLock, write_lockfile
 from luminesk_cli.domain.manifest import Check, load_manifest
+from luminesk_cli.domain.progress import ProgressEvent, observe_progress
 from luminesk_cli.infrastructure.state import load_state, write_state
 
 MANIFEST = """\
@@ -406,7 +407,9 @@ def test_runtime_start_records_container_and_readiness(tmp_path: Path) -> None:
 
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    state = DockerRuntime(runner=runner).start(root)
+    events: list[ProgressEvent] = []
+    with observe_progress(events.append):
+        state = DockerRuntime(runner=runner).start(root)
 
     assert state.runtime.status == "running"
     assert state.runtime.container_id == "container-id"
@@ -414,6 +417,11 @@ def test_runtime_start_records_container_and_readiness(tmp_path: Path) -> None:
     assert load_state(root) == state
     run_call = next(call for call in calls if call[1] == "run")
     assert run_call[-1] == "server.jar; echo not-a-shell"
+    assert events == [
+        ProgressEvent("start"),
+        ProgressEvent("ready", completed=0, total=1, unit="checks"),
+        ProgressEvent("ready", completed=1, total=1, unit="checks"),
+    ]
 
 
 def test_runtime_start_validates_input_overrides_before_docker(tmp_path: Path) -> None:

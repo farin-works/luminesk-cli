@@ -8,11 +8,13 @@ from typing import Literal
 
 from rich.console import Console
 from rich.text import Text
-from rich.theme import Theme
+
+from luminesk_cli.cli.theme import THEME as THEME
+from luminesk_cli.cli.theme import console
 
 OutputTone = Literal["success", "info", "warning", "plain"]
 
-CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 LABEL = re.compile(r"^(\s*)([A-Za-z][A-Za-z0-9 /()_-]*:)(.*)$")
 ACTION = re.compile(
     r"^(\s*)(add|added|change|changed|conflict|create|delete|missing|modify|"
@@ -22,21 +24,6 @@ ACTION = re.compile(
 HEADING = re.compile(r"^[A-Za-z][A-Za-z0-9 /()_-]+$")
 MAX_ERROR_DETAIL_LENGTH = 2_000
 MAX_ERROR_DETAIL_LINES = 8
-
-THEME = Theme(
-    {
-        "message.success": "bold #7fae83",
-        "message.info": "bold #7aa2c8",
-        "message.warning": "bold #c8a96b",
-        "message.error": "bold #cf7777",
-        "message.label": "#8fb3c9",
-        "message.muted": "#8b949e",
-        "message.command": "#8fb3c9",
-        "message.added": "#7fae83",
-        "message.removed": "#cf7777",
-        "message.prompt": "bold #7aa2c8",
-    }
-)
 
 
 def sanitize(value: str) -> str:
@@ -76,7 +63,7 @@ def print_error(
 
     rendered = Text()
     rendered.append("error", style="message.error")
-    rendered.append(f" [{code}]", style="message.muted")
+    rendered.append(f" [{sanitize(code)}]", style="message.muted")
     rendered.append(": ")
     rendered.append(sanitize(message))
     for line in _safe_error_details(code, details):
@@ -89,7 +76,7 @@ def print_usage_error(program: str, message: str) -> None:
     """Write an argparse-compatible usage error to stderr."""
 
     rendered = Text()
-    rendered.append(f"{program}: ", style="message.muted")
+    rendered.append(f"{sanitize(program)}: ", style="message.muted")
     rendered.append("error: ", style="message.error")
     rendered.append(sanitize(message))
     _console(stderr=True).print(rendered, soft_wrap=True)
@@ -114,7 +101,7 @@ def ask(question: str) -> str:
 
 
 def _console(*, stderr: bool = False) -> Console:
-    return Console(stderr=stderr, theme=THEME, highlight=False)
+    return console(stderr=stderr)
 
 
 def _safe_error_details(
@@ -128,7 +115,7 @@ def _safe_error_details(
     stderr = details.get("stderr")
     if not isinstance(stderr, str):
         return ()
-    safe = sanitize(stderr[-MAX_ERROR_DETAIL_LENGTH:]).replace("\r", "\n")
+    safe = sanitize(stderr[-MAX_ERROR_DETAIL_LENGTH:].replace("\r", "\n"))
     lines = [line.strip() for line in safe.splitlines() if line.strip()]
     return tuple(lines[-MAX_ERROR_DETAIL_LINES:])
 
@@ -166,6 +153,7 @@ def _styled_line(line: str, *, index: int, tone: OutputTone) -> Text:
             else "message.added"
         )
         rendered.stylize(style, start, start + len(action[2]))
+        rendered.stylize("message.path", action.end())
 
     marker = len(line) - len(line.lstrip())
     if line[marker : marker + 2] in {"+ ", "++"}:
@@ -174,6 +162,13 @@ def _styled_line(line: str, *, index: int, tone: OutputTone) -> Text:
         rendered.stylize("message.removed", marker)
 
     rendered.highlight_regex(r"`[^`]+`", style="message.command")
+    rendered.highlight_regex(
+        r"\b(?:running|ready|healthy|connected)\b", style="message.success"
+    )
+    rendered.highlight_regex(
+        r"\b(?:stopped|disconnected|pending)\b", style="message.warning"
+    )
+    rendered.highlight_regex(r"\b(?:failed|unhealthy)\b", style="message.error")
     rendered.highlight_regex(
         r"(?i)\bsha256:[0-9a-f]{16,}\b|\b[0-9a-f]{40,64}\b",
         style="message.muted",

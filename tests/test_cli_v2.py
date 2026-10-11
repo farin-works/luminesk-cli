@@ -19,7 +19,7 @@ from luminesk_cli.infrastructure.recipe_snapshot import create_recipe_snapshot
 from luminesk_cli.infrastructure.state import load_state
 
 
-def test_human_output_uses_restrained_semantic_colors() -> None:
+def test_human_output_uses_brand_semantic_colors() -> None:
     from luminesk_cli.cli.output import THEME, human_message
 
     stream = StringIO()
@@ -44,9 +44,9 @@ def test_human_output_uses_restrained_semantic_colors() -> None:
     rendered = stream.getvalue()
 
     assert "\x1b[" in rendered
-    assert "38;2;122;162;200m" in rendered
-    assert "38;2;127;174;131m" in rendered
-    assert "38;2;200;169;107m" in rendered
+    assert "38;2;255;51;121m" in rendered
+    assert "38;2;0;210;106m" in rendered
+    assert "38;2;255;200;61m" in rendered
     assert message.plain == (
         "Install preview\n"
         "  Runtime image: example/server@sha256:" + "a" * 64 + "\n"
@@ -99,6 +99,32 @@ def test_doctor_reports_healthy_cli_and_daemon(monkeypatch, capsys) -> None:
 
     assert [item["component"] for item in payload["checks"]] == ["docker"]
     assert payload["checks"][0]["daemonReachable"] is True
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_json_stays_clean_on_a_color_terminal(
+    available: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from luminesk_cli.cli.commands import doctor
+
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(
+        doctor.shutil, "which", lambda executable: "/docker" if available else None
+    )
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "{}", ""),
+    )
+
+    assert main(["doctor", "--json", "--non-interactive"]) == (0 if available else 8)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "\x1b" not in captured.out
+    assert json.loads(captured.out)["ok"] is available
 
 
 def test_debug_diagnostics_use_stderr_without_changing_json(

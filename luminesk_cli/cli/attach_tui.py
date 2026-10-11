@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import os
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -17,7 +18,8 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import HSplit, Layout, Window
-from prompt_toolkit.output import Output
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.output import ColorDepth, Output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
@@ -27,6 +29,7 @@ from luminesk_cli.application.runtime import (
     DockerRuntime,
 )
 from luminesk_cli.cli.output import sanitize
+from luminesk_cli.cli.theme import color_disabled, prompt_styles, supports_unicode
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 
 MAX_CONSOLE_COMMAND_BYTES = 64 * 1024
@@ -95,7 +98,7 @@ class AttachTui:
         )
         self._command = TextArea(
             height=1,
-            prompt=[("class:prompt", "❯ ")],
+            prompt=[("class:prompt", "❯ " if supports_unicode(sys.stdout) else "> ")],
             multiline=False,
             wrap_lines=False,
             accept_handler=self._accept_command,
@@ -108,6 +111,7 @@ class AttachTui:
             full_screen=True,
             mouse_support=False,
             style=_style(),
+            color_depth=_color_depth(),
             input=input,
             output=output,
         )
@@ -144,12 +148,27 @@ class AttachTui:
                     content=_dynamic_control(self._header),
                     style="class:header",
                 ),
-                Frame(self._logs, title="Console"),
-                Window(height=1, char="─", style="class:separator"),
-                self._command,
+                Window(
+                    height=Dimension(min=1, max=3),
+                    content=_dynamic_control(self._status_line),
+                    wrap_lines=True,
+                    dont_extend_height=True,
+                    style="class:header",
+                ),
+                Frame(self._logs, title="Console")
+                if supports_unicode(sys.stdout)
+                else self._logs,
                 Window(
                     height=1,
+                    char="─" if supports_unicode(sys.stdout) else "-",
+                    style="class:separator",
+                ),
+                self._command,
+                Window(
+                    height=Dimension(min=1, max=6),
                     content=_dynamic_control(self._footer),
+                    wrap_lines=True,
+                    dont_extend_height=True,
                     style="class:footer",
                 ),
             ]
@@ -157,25 +176,44 @@ class AttachTui:
 
     def _header(self) -> StyleAndTextTuples:
         return [
-            ("class:title", f" Luminesk · {sanitize(self._session.tag)} "),
-            ("class:status", f" {sanitize(self._status)}"),
+            ("class:title", " Luminesk "),
+            ("class:header", f"| {sanitize(self._session.tag)}"),
         ]
 
+    def _status_line(self) -> StyleAndTextTuples:
+        if self._status.startswith(
+            ("Action failed", "Cannot send", "Docker attach", "Command is too large")
+        ):
+            style = "class:status.error"
+        elif self._disconnected or self._closing:
+            style = "class:status.warning"
+        elif self._status.startswith("Connected"):
+            style = "class:status.connected"
+        else:
+            style = "class:status"
+        return [(style, f" {sanitize(self._status)}")]
+
     def _footer(self) -> StyleAndTextTuples:
-        return [
-            ("class:key", " ^C "),
-            ("class:help", "Stop  "),
-            ("class:key", " ^D "),
-            ("class:help", "Detach  "),
-            ("class:key.danger", " ^K "),
-            ("class:help", "Kill  "),
-            ("class:key", " ^L "),
-            ("class:help", "Clear  "),
-            ("class:key", " PgUp/PgDn "),
-            ("class:help", "Scroll  "),
-            ("class:key", " End "),
-            ("class:help", "Follow "),
-        ]
+        bindings = (
+            ("class:key", " ^D ", "Detach  "),
+            ("class:key.warning", " ^C ", "Stop  "),
+            ("class:key.danger", " ^K ", "Kill  "),
+            ("class:key", " ^L ", "Clear  "),
+            ("class:key", " PgUp/PgDn ", "Scroll  "),
+            ("class:key", " End ", "Follow "),
+        )
+        width = get_app().output.get_size().columns
+        fragments: StyleAndTextTuples = []
+        used = 0
+        for style, key, label in bindings:
+            # Keep each ASCII key and its meaning together on narrow terminals.
+            size = len(key) + len(label)
+            if used and used + size > width:
+                fragments.append(("class:footer", "\n"))
+                used = 0
+            fragments.extend(((style, key), ("class:help", label)))
+            used += size
+        return fragments
 
     def _create_key_bindings(self) -> KeyBindings:
         bindings = KeyBindings()
@@ -415,18 +453,18 @@ def _dynamic_control(
 
 
 def _style() -> Style:
-    return Style.from_dict(
-        {
-            "header": "bg:#1f2937 #d1d5db",
-            "title": "bold #93c5fd",
-            "status": "#9ca3af",
-            "console": "#d1d5db bg:#111827",
-            "separator": "#374151 bg:#111827",
-            "input": "#f3f4f6 bg:#111827",
-            "prompt": "bold #93c5fd",
-            "footer": "bg:#1f2937 #d1d5db",
-            "key": "bold #93c5fd bg:#374151",
-            "key.danger": "bold #fca5a5 bg:#374151",
-            "help": "#d1d5db bg:#1f2937",
-        }
-    )
+    return Style.from_dict(prompt_styles())
+
+
+def _color_depth() -> ColorDepth | None:
+    if color_disabled():
+        return ColorDepth.DEPTH_1_BIT
+    configured = ColorDepth.from_env()
+    if configured is not None:
+        return configured
+    if os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"} or (
+        os.environ.get("WT_SESSION")
+    ):
+        return ColorDepth.DEPTH_24_BIT
+    # The output adapter detects ANSI / 256 colors and legacy Windows consoles.
+    return None

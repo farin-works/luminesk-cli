@@ -11,6 +11,7 @@ import httpx
 
 from luminesk_cli.domain.errors import NetworkError, ResolutionError
 from luminesk_cli.domain.manifest import SourceSpec
+from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.infrastructure.security.network import validate_remote_url
 from luminesk_cli.infrastructure.security.transport import (
     ALLOW_PRIVATE_NETWORK_EXTENSION,
@@ -37,6 +38,7 @@ def request_metadata(
     *,
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
+    report_progress("metadata")
     current_url = url
     credential_host = urlsplit(url).hostname
 
@@ -104,6 +106,7 @@ def request_metadata(
                     if key.lower()
                     not in {"content-encoding", "content-length", "transfer-encoding"}
                 }
+                report_progress("resolve")
                 return httpx.Response(
                     response.status_code,
                     headers=decoded_headers,

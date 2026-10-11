@@ -77,7 +77,7 @@ def _prompt_for_input(
     spec: InputSpec,
     values: dict[str, InputValue],
 ) -> dict[str, InputValue]:
-    print_human(_input_description(spec), tone="plain")
+    print_human(_input_description(spec), tone="info")
 
     while True:
         try:

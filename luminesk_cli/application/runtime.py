@@ -23,6 +23,7 @@ from luminesk_cli.domain.instance import InstanceState, RuntimeState
 from luminesk_cli.domain.lockfile import LOCKFILE_NAME, Lockfile, load_lockfile
 from luminesk_cli.domain.manifest import Check, Manifest, RuntimePort, load_manifest
 from luminesk_cli.domain.primitives import safe_absolute_posix_path, safe_relative_path
+from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.infrastructure.recipe_snapshot import load_verified_installed_recipe
 from luminesk_cli.infrastructure.state import load_state, write_state
 
@@ -98,6 +99,7 @@ class DockerRuntime:
             len(manifest.runtime.ports),
             len(command),
         )
+        report_progress("start")
         result = self._run(command, check=False)
 
         if result.returncode != 0:
@@ -353,6 +355,7 @@ class DockerRuntime:
 
         LOGGER.debug("runtime readiness checks prepared count=%d", len(checks))
         for index, check in enumerate(checks):
+            report_progress("ready", completed=index, total=len(checks), unit="checks")
             LOGGER.debug(
                 "runtime readiness check started index=%d kind=%s required=%s",
                 index,
@@ -360,6 +363,9 @@ class DockerRuntime:
                 check.required,
             )
             self._wait_check(root, state, check, values)
+            report_progress(
+                "ready", completed=index + 1, total=len(checks), unit="checks"
+            )
             LOGGER.debug("runtime readiness check completed index=%d", index)
 
     def check_readiness(self, root: Path) -> InstanceState:

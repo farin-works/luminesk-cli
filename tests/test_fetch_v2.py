@@ -1,14 +1,76 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 from pathlib import Path
 
 import httpx
 import pytest
 
 from luminesk_cli.domain.errors import SecurityError
+from luminesk_cli.domain.progress import ProgressEvent, observe_progress
 from luminesk_cli.infrastructure.cache import ContentCache
 from luminesk_cli.infrastructure.fetch import SecureFetcher
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_download_progress_counts_decoded_bytes_and_verification(
+    tmp_path: Path, compressed: bool
+) -> None:
+    content = b"artifact" * 100_000
+    wire = gzip.compress(content) if compressed else content
+    headers = {"content-encoding": "gzip"} if compressed else {}
+    events: list[ProgressEvent] = []
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=wire, headers=headers)
+        )
+    ) as client:
+        fetcher = SecureFetcher(ContentCache(tmp_path / "cache"), client=client)
+        with observe_progress(events.append):
+            blob = fetcher.fetch(
+                "https://fixtures.invalid/artifact?private=never-display",
+                max_size=len(content),
+                allow_private_network=True,
+                expected_digest=f"sha256:{hashlib.sha256(content).hexdigest()}",
+            )
+    downloads = [
+        event
+        for event in events
+        if event.stage == "download" and event.completed is not None
+    ]
+    assert blob.size == len(content)
+    assert downloads[0].completed == 0
+    assert downloads[-1].completed == len(content)
+    assert all(
+        event.total == (None if compressed else len(content)) for event in downloads
+    )
+    assert events[-1].stage == "verify"
+    assert "never-display" not in repr(events)
+
+
+def test_failed_verification_keeps_original_error_and_removes_partial_download(
+    tmp_path: Path,
+) -> None:
+    events: list[ProgressEvent] = []
+    cache = ContentCache(tmp_path / "cache")
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"wrong digest")
+        )
+    ) as client:
+        with (
+            observe_progress(events.append),
+            pytest.raises(SecurityError, match="digest"),
+        ):
+            SecureFetcher(cache, client=client).fetch(
+                "https://fixtures.invalid/artifact",
+                max_size=1024,
+                expected_digest=f"sha256:{'a' * 64}",
+                allow_private_network=True,
+            )
+    assert events[-1] == ProgressEvent("verify")
+    assert not list(cache.root.glob("*.part"))
 
 
 def test_fetch_streams_into_content_cache(tmp_path: Path) -> None:

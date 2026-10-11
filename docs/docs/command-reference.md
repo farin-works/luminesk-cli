@@ -14,14 +14,25 @@ nesk [-h] [-v | --version] [--debug] COMMAND ...
 help. Run `nesk COMMAND --help` or `nesk catalog COMMAND --help` for parser help
 from the installed release.
 
-Human-oriented output uses a restrained color palette when stdout or stderr is
-an interactive terminal. Redirected output stays plain, and the standard
-`NO_COLOR` environment variable disables color explicitly. Color and layout do
-not affect `--json` responses. Long downloads, resolution, package builds,
-transactions, cache scans, Docker startup, and readiness waits show an animated
-status on interactive stderr. These indicators are disabled for redirected
-output, `--json`, `--non-interactive`, and `--debug`, so automation and detailed
-diagnostic logs remain stable.
+Human-oriented output uses the Luminesk pink accent for headings and prompts,
+green for success, yellow for warnings, and red-pink for errors. Rich output and
+the full-screen console share the same palette. True-color terminals use the
+brand colors; other terminals use the nearest supported colors. Redirected
+output stays plain, even with `FORCE_COLOR`. Setting `NO_COLOR` (including an
+empty value) disables color. Color and layout do not affect `--json` responses.
+
+Interactive progress distinguishes metadata requests, version resolution,
+artifact downloads, OCI image pulls, SHA-256 verification, package builds,
+transaction application, server startup, and readiness checks. Downloads show
+actual decoded bytes and a total when available; readiness shows completed
+checks. OCI pulls and other operations without backend counters show only the
+current operation, without an estimated percentage. Docker may also pull a
+missing locked image during startup. Installation itself does not start the
+server; use `nesk start` afterwards.
+
+Animated status uses stderr and is disabled when either output stream is
+redirected, or with `NO_COLOR`, `TERM=dumb`, `--json`, `--non-interactive`, or
+`--debug`. Errors retain their diagnostics; use `--debug` for stage-level logs.
 
 ## Shared automation options
 
@@ -395,6 +406,13 @@ live output. Enter sends a server command. The footer exposes `Ctrl+C` to stop,
 `Ctrl+D` to detach without stopping, `Ctrl+K` to kill, `Ctrl+L` to clear the
 local view, and scrolling keys. It requires a real terminal and rejects
 `--json` and `--non-interactive`.
+
+The dark header keeps connection status separate from the instance name. Logs
+use neutral text, the command line has a distinct background, and Stop/Kill
+shortcuts use warning/error colors. The footer wraps key-and-action pairs in
+narrow terminals. `NO_COLOR` keeps the layout and textual status without color;
+full-screen cursor control still requires a terminal. Terminal control codes in
+server output are neutralized rather than executed.
 
 ## Diagnostics, cache, and instance discovery
 

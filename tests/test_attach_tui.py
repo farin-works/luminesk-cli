@@ -1,15 +1,83 @@
 from __future__ import annotations
 
 import asyncio
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from luminesk_cli.application.runtime import AttachSession, DockerRuntime
 from luminesk_cli.cli.attach_tui import AttachTui, run_attach_tui
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
+
+
+@pytest.mark.parametrize("width", [32, 80])
+@pytest.mark.parametrize("no_color", [False, True])
+def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
+    tmp_path: Path, width: int, no_color: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("PROMPT_TOOLKIT_COLOR_DEPTH", raising=False)
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    stream = StringIO()
+    terminal = Vt100_Output(
+        stream,
+        lambda: Size(rows=24, columns=width),
+        term="xterm-256color",
+        enable_cpr=False,
+    )
+
+    async def scenario() -> list[str]:
+        process = FakeProcess([b"Readable log [red]literal[/red]\n\x1b]0;unsafe\x07\n"])
+
+        async def factory(argv: tuple[str, ...]) -> FakeProcess:
+            return process
+
+        with create_pipe_input() as pipe_input:
+            tui = AttachTui(
+                tmp_path,
+                DockerRuntime(),
+                _session(),
+                process_factory=factory,
+                input=pipe_input,
+                output=terminal,
+            )
+            task = asyncio.create_task(tui.run())
+            await asyncio.sleep(0.1)
+            screen = tui._application.renderer._last_screen
+            assert screen is not None
+            rows = [
+                "".join(screen.data_buffer[y][x].char for x in range(width))
+                for y in range(24)
+            ]
+            process.finish(0)
+            await asyncio.sleep(0.05)
+            assert tui._status_line()[0][0] == "class:status.warning"
+            assert "disconnected" in tui._status_line()[0][1]
+            pipe_input.send_bytes(b"\x04")
+            assert await asyncio.wait_for(task, 2) == 0
+        return rows
+
+    rows = asyncio.run(scenario())
+    text = "\n".join(rows)
+    assert "Luminesk" in text
+    assert "Connected" in text
+    assert "Readable log" in text
+    for key in ("^D", "^C", "^K", "^L", "PgUp/PgDn", "End"):
+        assert key in text
+    assert "\x1b]0;unsafe" not in stream.getvalue()
+    if no_color:
+        assert "38;" not in stream.getvalue()
+        assert "48;" not in stream.getvalue()
+    else:
+        assert "38;2;255;" in stream.getvalue()
 
 
 class FakeProcessOutput:

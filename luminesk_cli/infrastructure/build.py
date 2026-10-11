@@ -23,6 +23,7 @@ from luminesk_cli.domain.manifest import (
     SourceSpec,
 )
 from luminesk_cli.domain.package import PackageFile, PackageMetadata, ServerPackage
+from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.infrastructure.cache import ContentCache, digest_file
 from luminesk_cli.infrastructure.dockerfile import rewrite_dockerfile
 from luminesk_cli.infrastructure.package import (
@@ -186,6 +187,7 @@ class DeclarativeBuilder:
         *,
         inputs: Mapping[str, str | int | bool] | None = None,
     ) -> ServerPackage:
+        report_progress("build")
         if manifest.digest != lockfile.manifest_digest:
             raise ValidationError("lockfile does not match manifest")
 

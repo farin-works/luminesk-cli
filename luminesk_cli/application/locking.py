@@ -16,6 +16,7 @@ from luminesk_cli.domain.lockfile import (
     RuntimeLock,
 )
 from luminesk_cli.domain.manifest import LocalFileOptions, Manifest, SourceSpec
+from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.domain.recipe import RecipeOrigin
 from luminesk_cli.infrastructure.cache import ContentCache
 from luminesk_cli.infrastructure.dockerfile import resolve_build_images
@@ -142,6 +143,7 @@ class LockService:
         recipe_root: Path,
         client: httpx.Client,
     ) -> ResolvedSource:
+        report_progress("resolve")
         LOGGER.debug(
             "source resolution started type=%s local=%s",
             source.type,
