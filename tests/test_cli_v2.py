@@ -464,6 +464,8 @@ command = ["server"]
 
     captured = capsys.readouterr()
     assert "Configure inputs for Wizard Fixture" in captured.out
+    assert captured.out.count("Input 1 of 2") == 1
+    assert captured.out.count("Input 2 of 2") == 1
     assert "Accept the Minecraft EULA" in captured.out
     assert "Server name" in captured.out
     assert "must be true/false or yes/no" in captured.err

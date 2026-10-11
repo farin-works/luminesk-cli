@@ -25,10 +25,17 @@ Interactive progress distinguishes metadata requests, version resolution,
 artifact downloads, OCI image pulls, SHA-256 verification, package builds,
 transaction application, server startup, and readiness checks. Downloads show
 actual decoded bytes and a total when available; readiness shows completed
-checks. OCI pulls and other operations without backend counters show only the
-current operation, without an estimated percentage. Docker may also pull a
-missing locked image during startup. Installation itself does not start the
-server; use `nesk start` afterwards.
+checks. A known positive total produces a progress bar and percentage for the
+current transfer or check sequence, not the entire installation. The operation
+name remains visible above backend sub-stages. OCI layer downloads and extraction
+use Docker's counters when available. Operations without a valid total show a
+spinner and any available count, without an estimated percentage. Docker may
+also pull a missing locked image during startup. Installation itself does not
+start the server; use `nesk start` afterwards.
+
+The input wizard numbers the remaining inputs and keeps each prompt's type,
+required/optional status, default, and constraints together. Validation errors
+keep the current step active until the input is accepted.
 
 Animated status uses stderr and is disabled when either output stream is
 redirected, or with `NO_COLOR`, `TERM=dumb`, `--json`, `--non-interactive`, or
@@ -408,7 +415,8 @@ local view, and scrolling keys. It requires a real terminal and rejects
 `--json` and `--non-interactive`.
 
 The dark header keeps connection status separate from the instance name. Logs
-use neutral text, the command line has a distinct background, and Stop/Kill
+use neutral text with warning/error level labels highlighted, the command line
+has a distinct background and an empty-input hint, and Stop/Kill
 shortcuts use warning/error colors. The footer wraps key-and-action pairs in
 narrow terminals. `NO_COLOR` keeps the layout and textual status without color;
 full-screen cursor control still requires a terminal. Terminal control codes in

@@ -12,7 +12,7 @@ from rich.text import Text
 from luminesk_cli.cli.theme import THEME as THEME
 from luminesk_cli.cli.theme import console
 
-OutputTone = Literal["success", "info", "warning", "plain"]
+OutputTone = Literal["success", "info", "warning", "heading", "plain"]
 
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 LABEL = re.compile(r"^(\s*)([A-Za-z][A-Za-z0-9 /()_-]*:)(.*)$")
@@ -129,11 +129,15 @@ def _styled_line(line: str, *, index: int, tone: OutputTone) -> Text:
     if index == 0:
         rendered.stylize(f"message.{tone}")
     elif not line[:1].isspace() and HEADING.fullmatch(stripped):
-        rendered.stylize("message.info")
+        rendered.stylize("message.heading")
 
     label = LABEL.match(line)
     if label is not None:
         rendered.stylize("message.label", len(label[1]), len(label[1] + label[2]))
+        if label[2].strip().lower() in {"path:", "target:", "directory:"}:
+            rendered.stylize("message.path", label.end(2))
+        elif label[2].strip().lower() in {"command:", "runtime command:"}:
+            rendered.stylize("message.command", label.end(2))
 
     lowered = stripped.lower()
     if (
@@ -150,6 +154,10 @@ def _styled_line(line: str, *, index: int, tone: OutputTone) -> Text:
             "message.removed"
             if action[2].lower()
             in {"conflict", "delete", "missing", "remove", "removed"}
+            else "message.changed"
+            if action[2].lower() in {"change", "changed", "modify", "update"}
+            else "message.muted"
+            if action[2].lower() == "preserve"
             else "message.added"
         )
         rendered.stylize(style, start, start + len(action[2]))

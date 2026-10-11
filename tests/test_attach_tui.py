@@ -6,22 +6,35 @@ from pathlib import Path
 
 import pytest
 from prompt_toolkit.data_structures import Size
+from prompt_toolkit.document import Document
 from prompt_toolkit.input.defaults import create_pipe_input
-from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.output import ColorDepth, DummyOutput
 from prompt_toolkit.output.vt100 import Vt100_Output
 
 from luminesk_cli.application.runtime import AttachSession, DockerRuntime
-from luminesk_cli.cli.attach_tui import AttachTui, run_attach_tui
+from luminesk_cli.cli.attach_tui import (
+    AttachTui,
+    ConsoleLexer,
+    _clean_console_text,
+    run_attach_tui,
+)
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 
 
 @pytest.mark.parametrize("width", [32, 80])
 @pytest.mark.parametrize("no_color", [False, True])
+@pytest.mark.parametrize(
+    "depth", [ColorDepth.DEPTH_4_BIT, ColorDepth.DEPTH_8_BIT, ColorDepth.DEPTH_24_BIT]
+)
 def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
-    tmp_path: Path, width: int, no_color: bool, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    width: int,
+    no_color: bool,
+    depth: ColorDepth,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.delenv("PROMPT_TOOLKIT_COLOR_DEPTH", raising=False)
+    monkeypatch.setenv("PROMPT_TOOLKIT_COLOR_DEPTH", depth.value)
     if no_color:
         monkeypatch.setenv("NO_COLOR", "")
     monkeypatch.setenv("TERM", "xterm-256color")
@@ -70,14 +83,18 @@ def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
     assert "Luminesk" in text
     assert "Connected" in text
     assert "Readable log" in text
+    assert "Type a server command" in text
     for key in ("^D", "^C", "^K", "^L", "PgUp/PgDn", "End"):
         assert key in text
     assert "\x1b]0;unsafe" not in stream.getvalue()
     if no_color:
         assert "38;" not in stream.getvalue()
         assert "48;" not in stream.getvalue()
-    else:
+    elif depth == ColorDepth.DEPTH_24_BIT:
         assert "38;2;255;" in stream.getvalue()
+    else:
+        assert "38;2;" not in stream.getvalue()
+        assert "48;2;" not in stream.getvalue()
 
 
 class FakeProcessOutput:
@@ -266,3 +283,46 @@ def test_attach_tui_preserves_nonzero_docker_exit_code(tmp_path: Path) -> None:
         assert raised.value.details["exitCode"] == 17
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "line,level,style",
+    [
+        ("[12:34:56] [Server thread/WARN]: Can't keep up!", "WARN", "log.warning"),
+        ("[12:34:56] [Server thread/ERROR]: Load failed", "ERROR", "log.error"),
+        ("[INFO] Loaded world", "INFO", "log.level"),
+        ("DEBUG: Looking for config", "DEBUG", "log.debug"),
+        ("WARNING: Low memory", "WARNING", "log.warning"),
+        ("[FATAL] Server exited", "FATAL", "log.error"),
+        ("[TRACE] Loading", "TRACE", "log.debug"),
+    ],
+)
+def test_log_severity_styles_only_the_level(line: str, level: str, style: str) -> None:
+    fragments = ConsoleLexer().lex_document(Document(line))(0)
+    assert "".join(fragment[1] for fragment in fragments) == line
+    assert [(fragment[0], fragment[1]) for fragment in fragments if fragment[0]] == [
+        (f"class:{style}", level)
+    ]
+
+
+@pytest.mark.parametrize(
+    "line", ["player: ERROR is my name", "[INFO] player said ERROR", "WARNINGS.txt"]
+)
+def test_log_body_does_not_create_false_error_highlights(line: str) -> None:
+    fragments = ConsoleLexer().lex_document(Document(line))(0)
+    assert all(
+        fragment[0] not in {"class:log.error", "class:log.warning"}
+        for fragment in fragments
+    )
+
+
+def test_log_lexer_preserves_sanitized_ansi_and_line_breaks() -> None:
+    cleaned = _clean_console_text("[ERROR] \x1b[31muntrusted\r\nnext\rline\x9b2J")
+    document = Document(cleaned)
+    render_line = ConsoleLexer().lex_document(document)
+    rendered = "\n".join(
+        "".join(fragment[1] for fragment in render_line(index))
+        for index in range(document.line_count)
+    )
+    assert rendered == "[ERROR] �[31muntrusted\nnext\nline�2J"
+    assert render_line(document.line_count) == []

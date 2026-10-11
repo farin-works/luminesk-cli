@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
-import os
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -14,12 +14,15 @@ from prompt_toolkit import Application
 from prompt_toolkit.application import get_app
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.output import ColorDepth, Output
+from prompt_toolkit.layout.processors import AfterInput, ConditionalProcessor
+from prompt_toolkit.lexers import Lexer
+from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
@@ -29,11 +32,47 @@ from luminesk_cli.application.runtime import (
     DockerRuntime,
 )
 from luminesk_cli.cli.output import sanitize
-from luminesk_cli.cli.theme import color_disabled, prompt_styles, supports_unicode
+from luminesk_cli.cli.theme import prompt_color_depth as _color_depth
+from luminesk_cli.cli.theme import prompt_styles, supports_unicode
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 
 MAX_CONSOLE_COMMAND_BYTES = 64 * 1024
 DETACH_TIMEOUT_SECONDS = 1.0
+
+# Match explicit logging prefixes, never words in a player's message or command.
+LOG_LEVEL = re.compile(
+    r"^\s*(?:\[[^\]\n]*\]\s*)?"
+    r"(?:\[[^\]\n]*/(?P<thread>TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]"
+    r"|\[?(?P<level>TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]?(?=\s|:|$))"
+)
+
+
+class ConsoleLexer(Lexer):
+    """Highlight only severity labels, leaving long log bodies neutral."""
+
+    def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
+        def get_line(index: int) -> StyleAndTextTuples:
+            if not 0 <= index < document.line_count:
+                return []
+            line = document.lines[index]
+            match = LOG_LEVEL.match(line)
+            if match is None:
+                return [("", line)]
+            group = "thread" if match["thread"] else "level"
+            level = match[group]
+            style = (
+                "class:log.error"
+                if level in {"ERROR", "FATAL"}
+                else "class:log.warning"
+                if level in {"WARN", "WARNING"}
+                else "class:log.debug"
+                if level in {"TRACE", "DEBUG"}
+                else "class:log.level"
+            )
+            start, end = match.span(group)
+            return [("", line[:start]), (style, line[start:end]), ("", line[end:])]
+
+        return get_line
 
 
 class _ProcessInput(Protocol):
@@ -95,6 +134,7 @@ class AttachTui:
             scrollbar=True,
             wrap_lines=True,
             style="class:console",
+            lexer=ConsoleLexer(),
         )
         self._command = TextArea(
             height=1,
@@ -103,6 +143,12 @@ class AttachTui:
             wrap_lines=False,
             accept_handler=self._accept_command,
             style="class:input",
+            input_processors=[
+                ConditionalProcessor(
+                    AfterInput([("class:input.placeholder", "Type a server command")]),
+                    filter=Condition(lambda: not self._command.text),
+                )
+            ],
         )
         self._bindings = self._create_key_bindings()
         self._application: Application[int] = Application(
@@ -122,7 +168,7 @@ class AttachTui:
         except OSError as exc:
             raise RuntimeOperationError(f"cannot attach to Docker: {exc}") from exc
 
-        self._status = "Connected · recent history loaded"
+        self._status = "Connected | recent history loaded"
 
         def start_background_tasks() -> None:
             self._application.create_background_task(self._read_console())
@@ -182,7 +228,13 @@ class AttachTui:
 
     def _status_line(self) -> StyleAndTextTuples:
         if self._status.startswith(
-            ("Action failed", "Cannot send", "Docker attach", "Command is too large")
+            (
+                "Action failed",
+                "Cannot send",
+                "Docker attach",
+                "Command is too large",
+                "Killing server",
+            )
         ):
             style = "class:status.error"
         elif self._disconnected or self._closing:
@@ -368,9 +420,9 @@ class AttachTui:
             return
         self._disconnected = True
         self._status = (
-            "Server console disconnected · press Ctrl+D to exit"
+            "Server console disconnected | press Ctrl+D to exit"
             if returncode == 0
-            else f"Docker attach exited with code {returncode} · press Ctrl+D to exit"
+            else f"Docker attach exited with code {returncode} | press Ctrl+D to exit"
         )
         self._application.invalidate()
 
@@ -454,17 +506,3 @@ def _dynamic_control(
 
 def _style() -> Style:
     return Style.from_dict(prompt_styles())
-
-
-def _color_depth() -> ColorDepth | None:
-    if color_disabled():
-        return ColorDepth.DEPTH_1_BIT
-    configured = ColorDepth.from_env()
-    if configured is not None:
-        return configured
-    if os.environ.get("COLORTERM", "").lower() in {"truecolor", "24bit"} or (
-        os.environ.get("WT_SESSION")
-    ):
-        return ColorDepth.DEPTH_24_BIT
-    # The output adapter detects ANSI / 256 colors and legacy Windows consoles.
-    return None
