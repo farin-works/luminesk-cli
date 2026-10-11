@@ -22,7 +22,7 @@ Run these before opening or updating a pull request:
 
 ```bash
 uv run ruff check .
-uv run mypy luminesk_cli
+uv run ty check .
 uv run pytest
 ```
 

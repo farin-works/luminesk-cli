@@ -40,7 +40,7 @@ class _ProcessInput(Protocol):
 
 
 class _ProcessOutput(Protocol):
-    async def read(self, size: int = -1) -> bytes: ...
+    async def read(self, size: int = -1, /) -> bytes: ...
 
 
 class AttachProcess(Protocol):

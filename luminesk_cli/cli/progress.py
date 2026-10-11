@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
@@ -35,7 +35,7 @@ class Activity:
 
 
 @contextmanager
-def activity(namespace: Any, message: str) -> Iterator[Activity]:
+def activity(namespace: Any, message: str) -> Generator[Activity]:
     """Show a spinner on interactive stderr and remain silent for automation."""
 
     if not _enabled(namespace):

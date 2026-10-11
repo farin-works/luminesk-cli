@@ -17,9 +17,13 @@ Run the complete local gate after code changes:
 
 ```bash
 uv run python scripts/format.py --fix
-uv run mypy .
+uv run ty check .
 uv run pytest
 ```
+
+ty checks application code, tests, and scripts using the minimum Python version
+declared in `pyproject.toml`. Its platform target is `all` so local checks and CI
+analyze the same code, including Unix-only release scripts.
 
 Release-sensitive changes should also run:
 
