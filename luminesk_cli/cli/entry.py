@@ -14,11 +14,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Luminesk {__version__}")
         return 0
 
-    from luminesk_cli.cli.debug import configure_debug
-
-    configure_debug("--debug" in arguments)
-
-    from luminesk_cli.cli.dispatch import dispatch
     from luminesk_cli.cli.parser import parse_command
 
-    return dispatch(parse_command(arguments))
+    command = parse_command(arguments)
+
+    from luminesk_cli.cli.debug import configure_debug
+    from luminesk_cli.cli.dispatch import dispatch
+
+    configure_debug("--debug" in arguments)
+    return dispatch(command)

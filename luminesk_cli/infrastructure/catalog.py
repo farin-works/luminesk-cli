@@ -8,9 +8,11 @@ import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-import httpx
+if TYPE_CHECKING:
+    import httpx
 
 from luminesk_cli.domain.catalog import (
     DATABASE_REPOSITORY,
@@ -30,20 +32,7 @@ from luminesk_cli.domain.manifest import (
 )
 from luminesk_cli.domain.primitives import validate_digest
 from luminesk_cli.domain.recipe import RecipeSnapshot
-from luminesk_cli.infrastructure.cache import ContentCache
-from luminesk_cli.infrastructure.fetch import SecureFetcher
-from luminesk_cli.infrastructure.github_contents import GitHubContentsFetcher
-from luminesk_cli.infrastructure.recipe_snapshot import (
-    create_recipe_snapshot,
-    declared_recipe_assets,
-)
-from luminesk_cli.infrastructure.security.transport import create_secure_client
-from luminesk_cli.infrastructure.sources.common import (
-    request_json_object,
-    request_metadata,
-)
 from luminesk_cli.infrastructure.state import atomic_write, canonical_json_bytes
-from luminesk_cli.infrastructure.template import read_template_tree
 
 DATABASE_OWNER = "task-v1"
 DATABASE_NAME = "luminesk-database"
@@ -211,6 +200,11 @@ class CatalogClient:
         self.allow_private_network = allow_private_network
 
     def update(self) -> CatalogSnapshot:
+        from luminesk_cli.infrastructure.cache import ContentCache
+        from luminesk_cli.infrastructure.fetch import SecureFetcher
+        from luminesk_cli.infrastructure.security.transport import create_secure_client
+        from luminesk_cli.infrastructure.sources.common import request_metadata
+
         owned_client = self.client is None
         client = self.client or create_secure_client()
         try:
@@ -254,6 +248,15 @@ class CatalogClient:
         entry: CatalogEntry,
         destination: Path,
     ) -> RecipeSnapshot:
+        from luminesk_cli.infrastructure.cache import ContentCache
+        from luminesk_cli.infrastructure.github_contents import GitHubContentsFetcher
+        from luminesk_cli.infrastructure.recipe_snapshot import (
+            create_recipe_snapshot,
+            declared_recipe_assets,
+        )
+        from luminesk_cli.infrastructure.security.transport import create_secure_client
+        from luminesk_cli.infrastructure.template import read_template_tree
+
         if entry not in snapshot.entries:
             raise ValidationError(
                 "catalog entry does not belong to the active snapshot"
@@ -310,6 +313,8 @@ class CatalogClient:
     ) -> Manifest:
         """Fetch and verify one catalog manifest without its recipe assets."""
 
+        from luminesk_cli.infrastructure.security.transport import create_secure_client
+
         if entry not in snapshot.entries:
             raise ValidationError(
                 "catalog entry does not belong to the active snapshot"
@@ -324,6 +329,8 @@ class CatalogClient:
                 client.close()
 
     def _resolve_revision(self, client: httpx.Client) -> str:
+        from luminesk_cli.infrastructure.sources.common import request_json_object
+
         source = self._metadata_source()
         repository = request_json_object(
             client,
@@ -351,6 +358,9 @@ class CatalogClient:
         snapshot: CatalogSnapshot,
         entry: CatalogEntry,
     ) -> tuple[Manifest, bytes]:
+        from luminesk_cli.infrastructure.cache import ContentCache
+        from luminesk_cli.infrastructure.fetch import SecureFetcher
+
         fetcher = SecureFetcher(ContentCache(self.store.root / "blobs"), client=client)
         blob = fetcher.fetch(
             f"{RAW_ROOT}/{snapshot.revision}/{entry.path}/{MANIFEST_NAME}",

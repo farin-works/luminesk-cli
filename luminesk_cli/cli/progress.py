@@ -5,15 +5,14 @@ from __future__ import annotations
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from rich.console import Console
-from rich.status import Status
-from rich.text import Text
-
-from luminesk_cli.cli.output import sanitize
-from luminesk_cli.cli.theme import color_disabled, console, supports_unicode
 from luminesk_cli.domain.progress import ProgressEvent, Stage, observe_progress
+
+if TYPE_CHECKING:
+    from rich.console import Console
+    from rich.status import Status
+    from rich.text import Text
 
 STAGES: dict[Stage, str] = {
     "engine": "Connecting to Docker Engine",
@@ -55,6 +54,8 @@ def activity(namespace: Any, message: str) -> Generator[Activity]:
         yield Activity(None)
         return
 
+    from luminesk_cli.cli.theme import supports_unicode
+
     status = _console().status(
         _status_text(message),
         spinner="dots" if supports_unicode(sys.stderr) else "line",
@@ -70,17 +71,25 @@ def activity(namespace: Any, message: str) -> Generator[Activity]:
 
 
 def _enabled(namespace: Any) -> bool:
-    return (
+    terminal = (
         not bool(getattr(namespace, "json", False))
         and not bool(getattr(namespace, "non_interactive", False))
         and not bool(getattr(namespace, "debug", False))
         and sys.stderr.isatty()
         and sys.stdout.isatty()
-        and not color_disabled()
     )
+    if not terminal:
+        return False
+    from luminesk_cli.cli.theme import color_disabled
+
+    return not color_disabled()
 
 
 def _status_text(message: str) -> Text:
+    from rich.text import Text
+
+    from luminesk_cli.cli.output import sanitize
+
     return Text(sanitize(message), style="progress.detail")
 
 
@@ -97,4 +106,6 @@ def _event_text(event: ProgressEvent) -> Text:
 
 
 def _console() -> Console:
+    from luminesk_cli.cli.theme import console
+
     return console(stderr=True)

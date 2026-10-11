@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from io import StringIO
@@ -82,6 +83,41 @@ def test_version_cold_path_does_not_import_heavy_dependencies() -> None:
 
     assert result.returncode == 0
     assert result.stdout == "Luminesk 2.0.2\n\n"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--help"],
+        ["list", "--json"],
+        ["catalog", "status", "--json"],
+        ["doctor", "--json"],
+    ],
+)
+def test_local_commands_do_not_load_network_build_or_tui(
+    arguments: list[str], tmp_path: Path
+) -> None:
+    script = (
+        "import sys,shutil; shutil.which=lambda name: None; "
+        "from luminesk_cli.cli.entry import main; "
+        f"\ntry: main({arguments!r})\nexcept SystemExit: pass\n"
+        "for name in ('httpx','rich','prompt_toolkit','luminesk_cli.application.locking',"
+        "'luminesk_cli.infrastructure.build','luminesk_cli.infrastructure.oci'):"
+        "\n assert name not in sys.modules, name\n"
+    )
+    env = dict(
+        os.environ,
+        WIN_PD_OVERRIDE_LOCAL_APPDATA=str(tmp_path),
+        WIN_PD_OVERRIDE_APPDATA=str(tmp_path),
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_doctor_reports_healthy_cli_and_daemon(monkeypatch, capsys) -> None:

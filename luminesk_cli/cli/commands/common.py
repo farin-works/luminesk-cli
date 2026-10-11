@@ -5,27 +5,29 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from platformdirs import user_cache_dir, user_config_dir
 
-from luminesk_cli.application.locking import LockService
-from luminesk_cli.cli.output import OutputTone, print_human
 from luminesk_cli.domain.errors import ValidationError
-from luminesk_cli.domain.lockfile import LOCKFILE_NAME, Lockfile, load_lockfile
-from luminesk_cli.domain.manifest import MANIFEST_NAME, Manifest, load_manifest
-from luminesk_cli.domain.package import ServerPackage
-from luminesk_cli.domain.recipe import RecipeOrigin
-from luminesk_cli.infrastructure.build import DeclarativeBuilder
-from luminesk_cli.infrastructure.cache import ContentCache
-from luminesk_cli.infrastructure.catalog import CatalogStore
 from luminesk_cli.infrastructure.platform import container_platform
-from luminesk_cli.infrastructure.recipe_cache import RecipeCache
+
+if TYPE_CHECKING:
+    from luminesk_cli.cli.output import OutputTone
+    from luminesk_cli.domain.lockfile import Lockfile
+    from luminesk_cli.domain.manifest import Manifest
+    from luminesk_cli.domain.package import ServerPackage
+    from luminesk_cli.domain.recipe import RecipeOrigin
+    from luminesk_cli.infrastructure.cache import ContentCache
+    from luminesk_cli.infrastructure.catalog import CatalogStore
+    from luminesk_cli.infrastructure.recipe_cache import RecipeCache
 
 MAX_INPUT_FILE_SIZE = 64 * 1024
 
 
 def cache() -> ContentCache:
+    from luminesk_cli.infrastructure.cache import ContentCache
+
     return ContentCache(Path(user_cache_dir("luminesk_cli")) / "v2")
 
 
@@ -34,14 +36,20 @@ def index_path() -> Path:
 
 
 def catalog_store() -> CatalogStore:
+    from luminesk_cli.infrastructure.catalog import CatalogStore
+
     return CatalogStore(Path(user_cache_dir("luminesk_cli")) / "v2" / "catalog")
 
 
 def recipe_cache() -> RecipeCache:
+    from luminesk_cli.infrastructure.recipe_cache import RecipeCache
+
     return RecipeCache(Path(user_cache_dir("luminesk_cli")) / "v2" / "recipes")
 
 
 def recipe(directory: str | Path) -> tuple[Path, Manifest]:
+    from luminesk_cli.domain.manifest import MANIFEST_NAME, load_manifest
+
     root = Path(directory).expanduser().resolve()
     return root, load_manifest(root / MANIFEST_NAME)
 
@@ -105,6 +113,8 @@ def frozen_lock(
     *,
     recipe_origin: RecipeOrigin | None = None,
 ) -> Lockfile:
+    from luminesk_cli.domain.lockfile import LOCKFILE_NAME, load_lockfile
+
     return validate_frozen_lock(
         load_lockfile(root / LOCKFILE_NAME),
         manifest,
@@ -121,6 +131,9 @@ def resolve_lock(
     recipe_origin: RecipeOrigin | None = None,
     target: str | None = None,
 ) -> Lockfile:
+    from luminesk_cli.application.locking import LockService
+    from luminesk_cli.domain.lockfile import LOCKFILE_NAME, load_lockfile
+
     content_cache = cache()
 
     if frozen:
@@ -155,6 +168,8 @@ def build_package(
     lockfile: Lockfile,
     values: dict[str, str | int | bool],
 ) -> tuple[tempfile.TemporaryDirectory[str], ServerPackage]:
+    from luminesk_cli.infrastructure.build import DeclarativeBuilder
+
     temporary = tempfile.TemporaryDirectory(prefix="luminesk-cli-package-")
     package = DeclarativeBuilder(cache()).build(
         manifest,
@@ -255,4 +270,6 @@ def emit(
     if bool(getattr(namespace, "json", False)):
         print(json.dumps({"ok": True, **payload}, ensure_ascii=False, sort_keys=True))
     else:
+        from luminesk_cli.cli.output import print_human
+
         print_human(plain, tone=tone)
