@@ -27,6 +27,9 @@ REVISION = "a" * 40
 PINNED_IMAGE = f"example/server@sha256:{'b' * 64}"
 
 
+pytestmark = pytest.mark.usefixtures("docker_engine")
+
+
 def _manifest(*, build: bool = False, template: bool = True) -> bytes:
     template_line = 'template = "template"\n' if template else ""
     build_section = (

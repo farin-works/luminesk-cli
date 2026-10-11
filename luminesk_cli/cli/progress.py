@@ -16,13 +16,17 @@ from luminesk_cli.cli.theme import color_disabled, console, supports_unicode
 from luminesk_cli.domain.progress import ProgressEvent, Stage, observe_progress
 
 STAGES: dict[Stage, str] = {
+    "engine": "Connecting to Docker Engine",
+    "image-inspect": "Inspecting local OCI image",
+    "image-download": "Downloading OCI image layer",
+    "image-extract": "Extracting OCI image layer",
     "metadata": "Fetching metadata",
     "resolve": "Resolving versions",
     "download": "Downloading artifacts",
     "image": "Pulling OCI image",
     "verify": "Verifying SHA-256",
     "build": "Building package",
-    "start": "Starting server (Docker may pull the locked image)",
+    "start": "Starting server container",
     "ready": "Checking server readiness",
 }
 

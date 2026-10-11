@@ -690,8 +690,14 @@ def test_oci_resolver_pulls_and_selects_matching_repository_digest() -> None:
         del kwargs
         calls.append(argv)
 
-        if argv[1:3] == ["image", "inspect"] and len(calls) == 1:
-            return subprocess.CompletedProcess(argv, 1, "", "missing")
+        if argv[1] == "info":
+            return subprocess.CompletedProcess(argv, 0, "linux/amd64", "")
+
+        if argv[1:3] == ["image", "inspect"] and len(calls) == 2:
+            return subprocess.CompletedProcess(argv, 1, "", "No such image")
+
+        if argv[-1] == "{{.Os}}/{{.Architecture}}":
+            return subprocess.CompletedProcess(argv, 0, "linux/amd64", "")
 
         if argv[1] == "pull":
             return subprocess.CompletedProcess(argv, 0, "", "")
@@ -709,8 +715,19 @@ def test_oci_resolver_pulls_and_selects_matching_repository_digest() -> None:
         result = OciImageResolver(runner).resolve("registry.example/team/server:2.0")
 
     assert result == f"registry.example/team/server@sha256:{'d' * 64}"
-    assert calls[1] == ["docker", "pull", "registry.example/team/server:2.0"]
-    assert events == [ProgressEvent("image")]
+    assert calls[2] == [
+        "docker",
+        "pull",
+        "--platform",
+        "linux/amd64",
+        "registry.example/team/server:2.0",
+    ]
+    assert events == [
+        ProgressEvent("engine"),
+        ProgressEvent("image-inspect"),
+        ProgressEvent("image"),
+        ProgressEvent("image-inspect"),
+    ]
 
 
 @pytest.mark.parametrize(

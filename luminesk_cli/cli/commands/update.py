@@ -34,6 +34,7 @@ from luminesk_cli.domain.manifest import MANIFEST_NAME, Manifest, load_manifest
 from luminesk_cli.domain.recipe import RecipeOrigin, RecipeSnapshot
 from luminesk_cli.infrastructure.cache import digest_file
 from luminesk_cli.infrastructure.catalog import CatalogClient
+from luminesk_cli.infrastructure.oci import OciImageResolver
 from luminesk_cli.infrastructure.recipe import (
     acquire_github_recipe,
     normalize_git_source,
@@ -81,6 +82,7 @@ def run(namespace: Any) -> int:
             namespace,
             "Resolving sources and Docker images",
         ):
+            OciImageResolver().require_target(old_lock.target)
             new_lock = (
                 validate_frozen_lock(
                     old_lock,
@@ -94,6 +96,7 @@ def run(namespace: Any) -> int:
                     manifest,
                     frozen=False,
                     recipe_origin=candidate.origin,
+                    target=old_lock.target,
                 )
             )
         new_lock = _select_component(namespace.component, old_lock, new_lock)
@@ -183,6 +186,7 @@ def outdated(namespace: Any) -> int:
 
     with tempfile.TemporaryDirectory(prefix="luminesk-outdated-") as temporary:
         with activity(namespace, "Checking recipe, source, and image updates"):
+            OciImageResolver().require_target(old_lock.target)
             candidate = _candidate_recipe(
                 old_lock,
                 installed,
@@ -193,6 +197,7 @@ def outdated(namespace: Any) -> int:
                 candidate.manifest,
                 frozen=False,
                 recipe_origin=candidate.origin,
+                target=old_lock.target,
             )
 
     updates = _lock_changes(old_lock, new_lock)

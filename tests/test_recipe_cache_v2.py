@@ -19,6 +19,9 @@ REVISION = "a" * 40
 PINNED_IMAGE = f"example/server@sha256:{'b' * 64}"
 
 
+pytestmark = pytest.mark.usefixtures("docker_engine")
+
+
 def _local_source_snapshot(root: Path):
     root.mkdir()
     (root / "server.bin.in").write_bytes(b"offline server")

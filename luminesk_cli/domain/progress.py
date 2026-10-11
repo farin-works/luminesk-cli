@@ -9,7 +9,18 @@ from dataclasses import dataclass
 from typing import Literal
 
 Stage = Literal[
-    "metadata", "resolve", "download", "image", "verify", "build", "start", "ready"
+    "engine",
+    "image-inspect",
+    "image-download",
+    "image-extract",
+    "metadata",
+    "resolve",
+    "download",
+    "image",
+    "verify",
+    "build",
+    "start",
+    "ready",
 ]
 
 
@@ -20,7 +31,7 @@ class ProgressEvent:
     stage: Stage
     completed: int | None = None
     total: int | None = None
-    unit: Literal["bytes", "checks"] = "bytes"
+    unit: Literal["bytes", "checks", "layers"] = "bytes"
 
 
 _observer: ContextVar[Callable[[ProgressEvent], None] | None] = ContextVar(
@@ -42,7 +53,7 @@ def report_progress(
     *,
     completed: int | None = None,
     total: int | None = None,
-    unit: Literal["bytes", "checks"] = "bytes",
+    unit: Literal["bytes", "checks", "layers"] = "bytes",
 ) -> None:
     observer = _observer.get()
     if observer is not None:

@@ -25,7 +25,9 @@ from luminesk_cli.domain.manifest import (
 from luminesk_cli.domain.package import PackageFile, PackageMetadata, ServerPackage
 from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.infrastructure.cache import ContentCache, digest_file
+from luminesk_cli.infrastructure.docker_process import docker_failure, run_docker
 from luminesk_cli.infrastructure.dockerfile import rewrite_dockerfile
+from luminesk_cli.infrastructure.oci import OciImageResolver
 from luminesk_cli.infrastructure.package import (
     MAX_PACKAGE_FILES,
     MAX_PACKAGE_SIZE,
@@ -52,7 +54,10 @@ class DockerfileBuilder:
         spec: Build,
         destination: Path,
         images: dict[str, str],
+        *,
+        target: str,
     ) -> None:
+        OciImageResolver().require_target(target)
         with tempfile.TemporaryDirectory(
             prefix="luminesk-build-context-"
         ) as context_name:
@@ -83,6 +88,8 @@ class DockerfileBuilder:
             argv = [
                 "docker",
                 "build",
+                "--platform",
+                target,
                 "--file",
                 str(pinned_dockerfile),
                 "--network",
@@ -97,27 +104,38 @@ class DockerfileBuilder:
             ]
 
             try:
-                result = subprocess.run(
+                report_progress("build")
+                result = run_docker(
                     argv,
-                    check=False,
-                    capture_output=True,
-                    text=True,
                     timeout=spec.timeout,
-                    shell=False,
                 )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                raise TransactionError(f"Dockerfile build failed: {exc}") from exc
+            except subprocess.TimeoutExpired as exc:
+                raise TransactionError(
+                    "Dockerfile build timed out; check build steps, Docker Engine and network",
+                    timeout=spec.timeout,
+                ) from exc
+            except OSError as exc:
+                raise TransactionError("cannot execute Dockerfile build") from exc
 
             if result.returncode != 0:
                 raise TransactionError(
-                    "Dockerfile build failed",
+                    docker_failure("build", result.stderr or result.stdout),
                     exit_code=result.returncode,
-                    stderr=result.stderr[-4000:],
                 )
 
             try:
                 create_result = subprocess.run(
-                    ["docker", "create", "--name", container_name, image_tag, "true"],
+                    [
+                        "docker",
+                        "create",
+                        "--pull=never",
+                        "--platform",
+                        target,
+                        "--name",
+                        container_name,
+                        image_tag,
+                        "true",
+                    ],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -157,12 +175,14 @@ class DockerfileBuilder:
                     check=False,
                     capture_output=True,
                     shell=False,
+                    timeout=30,
                 )
                 subprocess.run(
                     ["docker", "image", "rm", "--force", image_tag],
                     check=False,
                     capture_output=True,
                     shell=False,
+                    timeout=30,
                 )
 
 
@@ -211,6 +231,7 @@ class DeclarativeBuilder:
                     manifest.build,
                     payload,
                     lockfile.build.images,
+                    target=lockfile.target,
                 )
                 _record_tree(payload, payload, ownership, "managed")
 

@@ -22,7 +22,6 @@ from luminesk_cli.infrastructure.cache import ContentCache
 from luminesk_cli.infrastructure.dockerfile import resolve_build_images
 from luminesk_cli.infrastructure.fetch import SecureFetcher
 from luminesk_cli.infrastructure.oci import OciImageResolver
-from luminesk_cli.infrastructure.platform import current_platform
 from luminesk_cli.infrastructure.security.transport import create_secure_client
 from luminesk_cli.infrastructure.sources.base import ResolverRegistry, default_registry
 
@@ -53,7 +52,7 @@ class LockService:
         recipe_origin: RecipeOrigin | None = None,
         target: str | None = None,
     ) -> Lockfile:
-        target_platform = target or current_platform()
+        target_platform = target or self.image_resolver.target_platform()
         LOGGER.debug(
             "lock resolution started target=%s sources=%d build=%s recipe_origin=%s",
             target_platform,
@@ -110,7 +109,9 @@ class LockService:
         LOGGER.debug(
             "runtime image resolution started pinned=%s", "@" in manifest.runtime.image
         )
-        runtime_image = self.image_resolver.resolve(manifest.runtime.image)
+        runtime_image = self.image_resolver.resolve(
+            manifest.runtime.image, target=target_platform
+        )
         LOGGER.debug("runtime image resolution completed")
         lockfile = Lockfile(
             manifest_digest=manifest.digest,
@@ -123,6 +124,7 @@ class LockService:
                         recipe_root,
                         manifest.build,
                         self.image_resolver,
+                        target=target_platform,
                     )
                 )
                 if manifest.build is not None

@@ -19,7 +19,7 @@ from luminesk_cli.domain.recipe import RecipeOrigin
 from luminesk_cli.infrastructure.build import DeclarativeBuilder
 from luminesk_cli.infrastructure.cache import ContentCache
 from luminesk_cli.infrastructure.catalog import CatalogStore
-from luminesk_cli.infrastructure.platform import current_platform
+from luminesk_cli.infrastructure.platform import container_platform
 from luminesk_cli.infrastructure.recipe_cache import RecipeCache
 
 MAX_INPUT_FILE_SIZE = 64 * 1024
@@ -56,9 +56,10 @@ def validate_frozen_lock(
     if lockfile.manifest_digest != manifest.digest:
         raise ValidationError("frozen lockfile does not match luminesk.toml")
 
-    if lockfile.target != current_platform():
+    target = container_platform()
+    if lockfile.target != target:
         raise ValidationError(
-            f"frozen lock target {lockfile.target} does not match {current_platform()}"
+            f"frozen lock target {lockfile.target} does not match {target}"
         )
 
     for source_id, source in lockfile.sources.items():
@@ -118,6 +119,7 @@ def resolve_lock(
     *,
     frozen: bool,
     recipe_origin: RecipeOrigin | None = None,
+    target: str | None = None,
 ) -> Lockfile:
     content_cache = cache()
 
@@ -129,10 +131,21 @@ def resolve_lock(
             recipe_origin=recipe_origin,
         )
 
+    selected_target = target or container_platform()
+    existing_path = root / LOCKFILE_NAME
+    if existing_path.is_file():
+        existing = load_lockfile(existing_path)
+        if existing.target != selected_target:
+            raise ValidationError(
+                f"existing lock target {existing.target} does not match Docker Engine "
+                f"{selected_target}; use the matching Docker context or a separate recipe directory"
+            )
+
     return LockService(content_cache).create(
         manifest,
         root,
         recipe_origin=recipe_origin,
+        target=selected_target,
     )
 
 

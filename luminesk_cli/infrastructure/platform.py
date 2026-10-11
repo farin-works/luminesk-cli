@@ -1,4 +1,4 @@
-"""Canonical target platform detection."""
+"""Host identification, separate from the Docker execution platform."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ ARCH_NAMES = {
 
 
 def current_platform() -> str:
+    """Return the host platform; never use it to select container artifacts."""
     os_name = OS_NAMES.get(sys.platform)
     machine = platform.machine().lower()
     architecture = ARCH_NAMES.get(machine)
@@ -33,3 +34,10 @@ def current_platform() -> str:
         )
 
     return f"{os_name}/{architecture}"
+
+
+def container_platform() -> str:
+    """Query the active Docker context rather than guessing from the host."""
+    from luminesk_cli.infrastructure.oci import OciImageResolver
+
+    return OciImageResolver().target_platform()

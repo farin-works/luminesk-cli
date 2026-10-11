@@ -18,6 +18,8 @@ from luminesk_cli.domain.preview import Preview
 from luminesk_cli.infrastructure.recipe_snapshot import create_recipe_snapshot
 from luminesk_cli.infrastructure.state import load_state
 
+pytestmark = pytest.mark.usefixtures("docker_engine")
+
 
 def test_human_output_uses_brand_semantic_colors() -> None:
     from luminesk_cli.cli.output import THEME, human_message

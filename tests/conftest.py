@@ -6,6 +6,14 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture
+def docker_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI orchestration tests use a deterministic engine, never the user's daemon."""
+    from luminesk_cli.infrastructure.oci import OciImageResolver
+
+    monkeypatch.setattr(OciImageResolver, "target_platform", lambda self: "linux/amd64")
+
+
 @pytest.fixture(autouse=True)
 def isolate_cli_user_directories(
     tmp_path: Path,

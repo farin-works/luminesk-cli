@@ -178,7 +178,7 @@ def test_activity_renders_real_counts_and_cleans_up_observer(
         "Pulling OCI image",
         "Verifying SHA-256",
         "Building package",
-        "Starting server (Docker may pull the locked image)",
+        "Starting server container",
         "Checking server readiness  1 / 2 checks",
     ]
 

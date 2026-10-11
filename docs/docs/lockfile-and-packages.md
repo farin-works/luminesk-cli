@@ -81,9 +81,17 @@ nesk cache verify
 
 `nesk lock` resolves source metadata, downloads/hashes selected artifacts,
 resolves the runtime image and Dockerfile base images, records the current
-target, and writes canonical sorted JSON crash-safely. Commit the manifest and
+Docker Engine target, and writes canonical sorted JSON crash-safely. Commit the manifest and
 lock together when publishing a local recipe workflow that needs a reviewed
 resolution.
+
+The target is the container platform, such as `linux/amd64` on Windows with
+Docker Desktop's Linux backend. It controls source selection, image pulls,
+builds and startup; it is not the host platform. Existing locks retain their
+target. A different engine architecture requires the matching Docker context
+or a separate recipe directory for a newly resolved lock. Frozen operations
+still query the local engine to verify compatibility, without resolving new
+source versions or consulting a registry for already pinned images.
 
 For an installed instance, use `outdated`, `diff`, and `update`; do not replace
 its applied lock by running an authoring `nesk lock` in place. The applied lock
