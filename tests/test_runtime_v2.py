@@ -12,6 +12,9 @@ from luminesk_cli.application.runtime import (
     DockerRuntime,
     build_run_argv,
 )
+from luminesk_cli.cli import attach_tui
+from luminesk_cli.cli.commands import runtime as runtime_commands
+from luminesk_cli.cli.entry import main
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 from luminesk_cli.domain.instance import (
     InstanceState,
@@ -434,6 +437,140 @@ def test_runtime_start_records_container_and_readiness(tmp_path: Path) -> None:
         ProgressEvent("ready", completed=0, total=1, unit="checks"),
         ProgressEvent("ready", completed=1, total=1, unit="checks"),
     ]
+
+
+@pytest.mark.parametrize("already_running", [False, True])
+@pytest.mark.parametrize("no_wait", [False, True])
+@pytest.mark.parametrize("explicit_dir", [False, True])
+def test_start_attach_reuses_runtime_and_running_container(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    already_running: bool,
+    no_wait: bool,
+    explicit_dir: bool,
+) -> None:
+    root = tmp_path / "instance"
+    _, initial = prepare_instance(root)
+    if already_running:
+        initial = replace(
+            initial, runtime=RuntimeState(container_id="container-id", status="running")
+        )
+        write_state(root, initial)
+    calls: list[str] = []
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[1])
+        output = {
+            "info": "linux/amd64",
+            "image": "linux/amd64",
+            "run": "container-id",
+            "inspect": "true",
+            "logs": "\x1b[32mDone loading\x1b[0m\n",
+        }.get(argv[1], "")
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    runtime = DockerRuntime(runner)
+    monkeypatch.setattr(runtime_commands, "DockerRuntime", lambda: runtime)
+    monkeypatch.setattr(runtime_commands.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(runtime_commands.sys.stdout, "isatty", lambda: True)
+    monkeypatch.chdir(root)
+
+    def run_tui(attached_root: Path, attached_runtime: DockerRuntime) -> int:
+        assert attached_runtime is runtime
+        assert attached_root == root.resolve()
+        state = load_state(root)
+        assert state is not None
+        assert state.runtime.container_id == "container-id"
+        assert (state.last_readiness_at is not None) == (
+            not no_wait and not already_running
+        )
+        calls.append("attach")
+        session = attached_runtime.prepare_attach(root)
+        assert session.argv[-1] == "container-id"
+        assert "\x1b[32m" in session.history
+        return 0
+
+    monkeypatch.setattr(attach_tui, "run_attach_tui", run_tui)
+    args = ["start", "--attach"]
+    if explicit_dir:
+        args += ["--dir", str(root)]
+    if no_wait:
+        args.append("--no-wait")
+    assert main(args) == 0
+    assert calls.count("attach") == 1
+    if already_running:
+        assert calls == ["inspect", "attach", "inspect", "logs"]
+        assert load_state(root) == initial
+    else:
+        assert calls.count("run") == 1
+        assert calls.count("logs") == (1 if no_wait else 2)
+    assert "stop" not in calls and "kill" not in calls
+
+
+@pytest.mark.parametrize("failure", ["start", "readiness", "attach", "exited"])
+def test_start_attach_failure_preserves_lifecycle_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    root = tmp_path / "instance"
+    prepare_instance(root)
+    calls: list[str] = []
+    attaching = False
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[1])
+        if failure == "start" and argv[1] == "run":
+            return subprocess.CompletedProcess(argv, 1, "", "start failed")
+        output = {
+            "info": "linux/amd64",
+            "image": "linux/amd64",
+            "run": "container-id",
+            "inspect": "true",
+        }.get(argv[1], "")
+        if failure == "exited" and attaching and argv[1] == "inspect":
+            output = "false"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    runtime = DockerRuntime(runner)
+
+    def ready(*args: object) -> None:
+        calls.append("ready")
+        if failure == "readiness":
+            raise RuntimeOperationError("readiness failed")
+
+    def run_tui(attached_root: Path, attached_runtime: DockerRuntime) -> int:
+        nonlocal attaching
+        attaching = True
+        calls.append("attach")
+        attached_runtime.prepare_attach(attached_root)
+        raise RuntimeOperationError("attach failed")
+
+    monkeypatch.setattr(runtime, "wait_ready", ready)
+    monkeypatch.setattr(runtime_commands, "DockerRuntime", lambda: runtime)
+    monkeypatch.setattr(runtime_commands.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(runtime_commands.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(attach_tui, "run_attach_tui", run_tui)
+    assert main(["start", "--dir", str(root), "--attach"]) == 8
+    stderr = capsys.readouterr().err
+    assert ("not running" if failure == "exited" else f"{failure} failed") in stderr
+    final = load_state(root)
+    assert final is not None
+    if failure in {"attach", "exited"}:
+        assert "stop" not in calls
+        assert calls.count("rm") == 1
+        assert final.runtime.status == "running"
+    else:
+        assert "attach" not in calls
+        assert final.runtime.status == "stopped"
+        if failure == "readiness":
+            assert "stop" in calls
+            assert calls.count("rm") == 2
 
 
 def test_runtime_mount_keeps_unicode_spaces_and_csv_fields(tmp_path: Path) -> None:

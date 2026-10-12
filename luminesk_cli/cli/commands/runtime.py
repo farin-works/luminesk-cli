@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,13 @@ from luminesk_cli.domain.manifest import MANIFEST_NAME
 
 
 def start(namespace: Any) -> int:
+    if namespace.attach:
+        if namespace.json or namespace.non_interactive:
+            raise ValidationError(
+                "--attach cannot be combined with --json or --non-interactive"
+            )
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            raise ValidationError("--attach requires an interactive TTY")
     root = _instance_root(namespace.dir)
     _, manifest = recipe(root)
     values = parse_inputs(manifest, namespace.set, namespace.set_file)
@@ -19,12 +27,17 @@ def start(namespace: Any) -> int:
         if not namespace.no_wait
         else "Preparing the Docker image and starting the server"
     )
+    runtime = DockerRuntime()
     with activity(namespace, message):
-        state = DockerRuntime().start(
+        state = runtime.start(
             root,
             input_overrides=values,
             wait_for_readiness=not namespace.no_wait,
         )
+    if namespace.attach:
+        from luminesk_cli.cli.attach_tui import run_attach_tui
+
+        return run_attach_tui(root, runtime)
     emit(
         namespace,
         {
