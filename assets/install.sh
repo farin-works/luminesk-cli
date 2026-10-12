@@ -155,7 +155,7 @@ $1=="D" {if($2!="755" || $3!="0" || $4!="-") exit 1}
 $1=="L" {if($2!="777" || $3!="0" || !safe($4)) exit 1; links[$5]=$4}
 $1!="F" && $1!="D" && $1!="L" {exit 1}
 {kind[$5]=$1; if(NR>20000) exit 1}
-END {if(NR==0) exit 1; for(p in kind) {parent=p; while(sub(/\/[^/]+$/,"",parent)) if(kind[parent]!="D") exit 1} for(p in links) if(kind[links[p]]!="F" && kind[links[p]]!="D") exit 1; if(kind["nesk"]!="F" || kind["_internal"]!="D") exit 1}
+END {if(NR==0) exit 1; for(p in kind) {parent=p; while(sub(/\/[^\/]+$/,"",parent)) if(kind[parent]!="D") exit 1} for(p in links) if(kind[links[p]]!="F" && kind[links[p]]!="D") exit 1; if(kind["nesk"]!="F" || kind["_internal"]!="D") exit 1}
 ' "$WORK/manifest" || fail 'Unsafe bundle inventory'
 { echo nesk/.bundle-manifest; awk '{print "nesk/"$5 ($1=="D"?"/":"")}' "$WORK/manifest"; } | LC_ALL=C sort > "$WORK/expected"
 unzip -Z1 "$WORK/bundle.zip" | head -c 4194305 > "$WORK/members"
