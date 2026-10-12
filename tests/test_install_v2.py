@@ -135,7 +135,9 @@ def test_install_refuses_to_overwrite_user_drift(tmp_path: Path) -> None:
         )
 
     assert (target / "server.jar").read_bytes() == b"user modified"
-    assert load_state(target).installed_package_digest == first_package.digest  # type: ignore[union-attr]
+    state = load_state(target)
+    assert state is not None
+    assert state.installed_package_digest == first_package.digest
 
 
 def test_instance_validation_ignores_user_owned_drift(tmp_path: Path) -> None:

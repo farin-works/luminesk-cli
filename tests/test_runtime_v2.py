@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,9 @@ from luminesk_cli.application.runtime import (
     DockerRuntime,
     build_run_argv,
 )
+from luminesk_cli.cli import attach_tui
+from luminesk_cli.cli.commands import runtime as runtime_commands
+from luminesk_cli.cli.entry import main
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 from luminesk_cli.domain.instance import (
     InstanceState,
@@ -19,6 +23,7 @@ from luminesk_cli.domain.instance import (
 )
 from luminesk_cli.domain.lockfile import Lockfile, RuntimeLock, write_lockfile
 from luminesk_cli.domain.manifest import Check, load_manifest
+from luminesk_cli.domain.progress import ProgressEvent, observe_progress
 from luminesk_cli.infrastructure.state import load_state, write_state
 
 MANIFEST = """\
@@ -301,13 +306,17 @@ def test_runtime_logs_stops_production_capture_at_byte_limit(
     class Process:
         def __init__(self) -> None:
             self.stdout = Pipe()
+            self.stderr = None
             self.terminated = False
 
         def terminate(self) -> None:
             self.terminated = True
 
+        def poll(self) -> int | None:
+            return 0 if self.terminated else None
+
         def kill(self) -> None:
-            raise AssertionError("terminated process should not require kill")
+            self.terminated = True
 
         def wait(self, timeout: int | None = None) -> int:
             del timeout
@@ -359,7 +368,7 @@ def test_prepare_attach_rejects_stopped_container(tmp_path: Path) -> None:
     prepare_instance(root)
 
     def runner(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 1, "false\n", "")
+        return subprocess.CompletedProcess(argv, 1, "", "No such object: instance")
 
     with pytest.raises(RuntimeOperationError, match="not running"):
         DockerRuntime(runner=runner).prepare_attach(root)
@@ -395,6 +404,9 @@ def test_runtime_start_records_container_and_readiness(tmp_path: Path) -> None:
     def runner(argv, **kwargs):
         calls.append(tuple(argv))
 
+        if argv[1] in {"info", "image"}:
+            return subprocess.CompletedProcess(argv, 0, "linux/amd64", "")
+
         if argv[1] == "run":
             return subprocess.CompletedProcess(argv, 0, "container-id\n", "")
 
@@ -406,7 +418,9 @@ def test_runtime_start_records_container_and_readiness(tmp_path: Path) -> None:
 
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    state = DockerRuntime(runner=runner).start(root)
+    events: list[ProgressEvent] = []
+    with observe_progress(events.append):
+        state = DockerRuntime(runner=runner).start(root)
 
     assert state.runtime.status == "running"
     assert state.runtime.container_id == "container-id"
@@ -414,6 +428,268 @@ def test_runtime_start_records_container_and_readiness(tmp_path: Path) -> None:
     assert load_state(root) == state
     run_call = next(call for call in calls if call[1] == "run")
     assert run_call[-1] == "server.jar; echo not-a-shell"
+    assert "--pull=never" in run_call
+    assert run_call[run_call.index("--platform") + 1] == "linux/amd64"
+    assert events == [
+        ProgressEvent("engine"),
+        ProgressEvent("image-inspect"),
+        ProgressEvent("start"),
+        ProgressEvent("ready", completed=0, total=1, unit="checks"),
+        ProgressEvent("ready", completed=1, total=1, unit="checks"),
+    ]
+
+
+@pytest.mark.parametrize("already_running", [False, True])
+@pytest.mark.parametrize("no_wait", [False, True])
+@pytest.mark.parametrize("explicit_dir", [False, True])
+def test_start_attach_reuses_runtime_and_running_container(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    already_running: bool,
+    no_wait: bool,
+    explicit_dir: bool,
+) -> None:
+    root = tmp_path / "instance"
+    _, initial = prepare_instance(root)
+    if already_running:
+        initial = replace(
+            initial, runtime=RuntimeState(container_id="container-id", status="running")
+        )
+        write_state(root, initial)
+    calls: list[str] = []
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[1])
+        output = {
+            "info": "linux/amd64",
+            "image": "linux/amd64",
+            "run": "container-id",
+            "inspect": "true",
+            "logs": "\x1b[32mDone loading\x1b[0m\n",
+        }.get(argv[1], "")
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    runtime = DockerRuntime(runner)
+    monkeypatch.setattr(runtime_commands, "DockerRuntime", lambda: runtime)
+    monkeypatch.setattr(runtime_commands.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(runtime_commands.sys.stdout, "isatty", lambda: True)
+    monkeypatch.chdir(root)
+
+    def run_tui(attached_root: Path, attached_runtime: DockerRuntime) -> int:
+        assert attached_runtime is runtime
+        assert attached_root == root.resolve()
+        state = load_state(root)
+        assert state is not None
+        assert state.runtime.container_id == "container-id"
+        assert (state.last_readiness_at is not None) == (
+            not no_wait and not already_running
+        )
+        calls.append("attach")
+        session = attached_runtime.prepare_attach(root)
+        assert session.argv[-1] == "container-id"
+        assert "\x1b[32m" in session.history
+        return 0
+
+    monkeypatch.setattr(attach_tui, "run_attach_tui", run_tui)
+    args = ["start", "--attach"]
+    if explicit_dir:
+        args += ["--dir", str(root)]
+    if no_wait:
+        args.append("--no-wait")
+    assert main(args) == 0
+    assert calls.count("attach") == 1
+    if already_running:
+        assert calls == ["inspect", "attach", "inspect", "logs"]
+        assert load_state(root) == initial
+    else:
+        assert calls.count("run") == 1
+        assert calls.count("logs") == (1 if no_wait else 2)
+    assert "stop" not in calls and "kill" not in calls
+
+
+@pytest.mark.parametrize("failure", ["start", "readiness", "attach", "exited"])
+def test_start_attach_failure_preserves_lifecycle_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    root = tmp_path / "instance"
+    prepare_instance(root)
+    calls: list[str] = []
+    attaching = False
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[1])
+        if failure == "start" and argv[1] == "run":
+            return subprocess.CompletedProcess(argv, 1, "", "start failed")
+        output = {
+            "info": "linux/amd64",
+            "image": "linux/amd64",
+            "run": "container-id",
+            "inspect": "true",
+        }.get(argv[1], "")
+        if failure == "exited" and attaching and argv[1] == "inspect":
+            output = "false"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    runtime = DockerRuntime(runner)
+
+    def ready(*args: object) -> None:
+        calls.append("ready")
+        if failure == "readiness":
+            raise RuntimeOperationError("readiness failed")
+
+    def run_tui(attached_root: Path, attached_runtime: DockerRuntime) -> int:
+        nonlocal attaching
+        attaching = True
+        calls.append("attach")
+        attached_runtime.prepare_attach(attached_root)
+        raise RuntimeOperationError("attach failed")
+
+    monkeypatch.setattr(runtime, "wait_ready", ready)
+    monkeypatch.setattr(runtime_commands, "DockerRuntime", lambda: runtime)
+    monkeypatch.setattr(runtime_commands.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(runtime_commands.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(attach_tui, "run_attach_tui", run_tui)
+    assert main(["start", "--dir", str(root), "--attach"]) == 8
+    stderr = capsys.readouterr().err
+    assert ("not running" if failure == "exited" else f"{failure} failed") in stderr
+    final = load_state(root)
+    assert final is not None
+    if failure in {"attach", "exited"}:
+        assert "stop" not in calls
+        assert calls.count("rm") == 1
+        assert final.runtime.status == "running"
+    else:
+        assert "attach" not in calls
+        assert final.runtime.status == "stopped"
+        if failure == "readiness":
+            assert "stop" in calls
+            assert calls.count("rm") == 2
+
+
+def test_runtime_mount_keeps_unicode_spaces_and_csv_fields(tmp_path: Path) -> None:
+    root = tmp_path / "Lumi server, данные"
+    lock, state = prepare_instance(root)
+    manifest = load_manifest(root / "luminesk.toml")
+    argv = build_run_argv(
+        root, manifest, lock.runtime.image, "test", state.inputs, target=lock.target
+    )
+    fields = next(csv.reader([argv[argv.index("--mount") + 1]]))
+    assert fields == ["type=bind", f"src={root / 'data'}", "dst=/server/data"]
+    assert argv[argv.index("--user") + 1] == "1000:1000"
+    assert "19132:19132/udp" in argv
+
+
+def test_status_does_not_mark_a_container_stopped_when_daemon_fails(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "instance"
+    _, state = prepare_instance(root)
+    state = replace(
+        state, runtime=RuntimeState(container_id="container-id", status="running")
+    )
+    write_state(root, state)
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv, 1, "", "Cannot connect to Docker daemon"
+        )
+
+    with pytest.raises(RuntimeOperationError, match="engine unavailable"):
+        DockerRuntime(runner).status(root)
+    assert load_state(root) == state
+
+
+def test_runtime_pulls_missing_pin_before_run_and_keeps_lock(tmp_path: Path) -> None:
+    root = tmp_path / "instance"
+    lock, _ = prepare_instance(root)
+    original = (root / "luminesk.lock").read_bytes()
+    calls: list[tuple[str, ...]] = []
+    present = False
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal present
+        calls.append(tuple(argv))
+        output = ""
+        if argv[1] == "info":
+            output = "linux/amd64"
+        elif argv[1] == "image":
+            if not present:
+                return subprocess.CompletedProcess(argv, 1, "", "No such image")
+            output = "linux/amd64"
+        elif argv[1] == "pull":
+            assert argv[-1] == lock.runtime.image
+            present = True
+        elif argv[1] == "run":
+            assert present
+            assert "--pull=never" in argv
+            output = "container-id"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    DockerRuntime(runner).start(root, wait_for_readiness=False)
+    assert [call[1] for call in calls] == [
+        "info",
+        "image",
+        "pull",
+        "image",
+        "rm",
+        "run",
+    ]
+    assert (root / "luminesk.lock").read_bytes() == original
+
+
+def test_runtime_rejects_wrong_engine_without_removing_container(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "instance"
+    _, before = prepare_instance(root)
+    calls: list[str] = []
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[1])
+        return subprocess.CompletedProcess(argv, 0, "linux/arm64", "")
+
+    with pytest.raises(RuntimeOperationError, match="locked target"):
+        DockerRuntime(runner).start(root)
+    assert calls == ["info"]
+    assert load_state(root) == before
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_start_timeout_or_interrupt_cleans_up_without_committing(
+    tmp_path: Path,
+    interrupt: bool,
+) -> None:
+    root = tmp_path / "instance"
+    _, before = prepare_instance(root)
+    calls: list[str] = []
+
+    def runner(
+        argv: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[1])
+        if argv[1] == "run":
+            if interrupt:
+                raise KeyboardInterrupt
+            raise subprocess.TimeoutExpired(argv, 60, stderr="secret")
+        return subprocess.CompletedProcess(argv, 0, "linux/amd64", "")
+
+    with pytest.raises(KeyboardInterrupt if interrupt else RuntimeOperationError):
+        DockerRuntime(runner).start(root)
+    assert calls[-2:] == ["run", "rm"]
+    assert load_state(root) == before
 
 
 def test_runtime_start_validates_input_overrides_before_docker(tmp_path: Path) -> None:

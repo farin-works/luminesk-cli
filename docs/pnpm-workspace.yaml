@@ -8,7 +8,19 @@ auditConfig:
   ignoreGhsas:
     - GHSA-w3rx-r6r6-pgpr
     - GHSA-5p2g-fcmc-qvqq
+    # braces <=3.0.3 has no published fix as of 2026-10-12.
+    # Temporary release exception approved by the maintainer; docs tooling only.
+    # Deeply nested glob patterns can exhaust the stack. Review by 2026-11-12
+    # or immediately when an upstream patch becomes available.
+    - GHSA-vfj7-8cjw-p6xm
 overrides:
+  # Patched docs build dependencies; upstream ranges still retain vulnerable versions.
+  '@swc/html': 1.15.47
+  colord: 2.9.4
+  fast-uri: 3.1.8
+  postcss-selector-parser: 7.1.6
+  source-map-js: 1.2.2
+  tinypool: 2.1.2
   browserslist: 4.28.8
   js-yaml: 4.3.2
   qs: 6.16.0

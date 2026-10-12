@@ -431,7 +431,7 @@ def _parse_inputs(value: Any) -> tuple[InputSpec, ...]:
         result.append(
             InputSpec(
                 name=name,
-                type=cast(Literal["string", "integer", "boolean"], input_type),
+                type=input_type,
                 default=cast(str | int | bool | None, default),
                 prompt=optional_string(spec, "prompt", path),
                 minimum=minimum,
@@ -793,7 +793,7 @@ def _parse_runtime(value: Any) -> Runtime:
                     mount["source"], f"{item_path}.source", allow_dot=True
                 ),
                 target=require_string(mount["target"], f"{item_path}.target"),
-                mode=cast(Literal["ro", "rw"], mode),
+                mode=mode,
             )
         )
 
@@ -820,7 +820,7 @@ def _parse_runtime(value: Any) -> Runtime:
                 name=require_string(port["name"], f"{item_path}.name"),
                 host=host,
                 container=container,
-                protocol=cast(Literal["tcp", "udp"], protocol),
+                protocol=protocol,
             )
         )
 

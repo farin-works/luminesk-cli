@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from luminesk_cli.domain.errors import NetworkError, SecurityError
+from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.infrastructure.cache import CachedBlob, ContentCache
 from luminesk_cli.infrastructure.security.network import (
     AddressResolver,
@@ -55,11 +56,13 @@ class SecureFetcher:
         headers: Mapping[str, str] | None = None,
     ) -> CachedBlob:
         if expected_digest is not None:
+            report_progress("verify")
             cached = self.cache.restore(expected_digest)
 
             if cached is not None:
                 return cached
 
+        report_progress("download")
         owned_client = self._client is None
         client = self._client or create_secure_client(resolver=self._address_resolver)
 
@@ -186,9 +189,11 @@ class SecureFetcher:
         temporary = Path(temporary_name)
         hasher = hashlib.sha256()
         size = 0
+        total = expected_size if expected_size is not None else declared_size
 
         try:
             with os.fdopen(descriptor, "wb") as handle:
+                report_progress("download", completed=0, total=total)
                 for chunk in response.iter_bytes(DOWNLOAD_CHUNK_SIZE):
                     size += len(chunk)
 
@@ -201,10 +206,12 @@ class SecureFetcher:
 
                     handle.write(chunk)
                     hasher.update(chunk)
+                    report_progress("download", completed=size, total=total)
 
                 handle.flush()
                 os.fsync(handle.fileno())
 
+            report_progress("verify")
             digest = f"sha256:{hasher.hexdigest()}"
 
             if expected_size is not None and size != expected_size:

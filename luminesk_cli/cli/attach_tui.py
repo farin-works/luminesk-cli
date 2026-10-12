@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -12,11 +13,18 @@ from typing import Protocol
 from prompt_toolkit import Application
 from prompt_toolkit.application import get_app
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import UIContent, UIControl
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.layout.processors import AfterInput, ConditionalProcessor
+from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
@@ -26,11 +34,49 @@ from luminesk_cli.application.runtime import (
     AttachSession,
     DockerRuntime,
 )
+from luminesk_cli.cli.console_logs import ConsoleLogBuffer
 from luminesk_cli.cli.output import sanitize
+from luminesk_cli.cli.theme import color_disabled, prompt_styles, supports_unicode
+from luminesk_cli.cli.theme import prompt_color_depth as _color_depth
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 
 MAX_CONSOLE_COMMAND_BYTES = 64 * 1024
 DETACH_TIMEOUT_SECONDS = 1.0
+
+# Match explicit logging prefixes, never words in a player's message or command.
+LOG_LEVEL = re.compile(
+    r"^\s*(?:\[[^\]\n]*\]\s*)?"
+    r"(?:\[[^\]\n]*/(?P<thread>TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]"
+    r"|\[?(?P<level>TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\]?(?=\s|:|$))"
+)
+
+
+class ConsoleLexer(Lexer):
+    """Highlight only severity labels, leaving long log bodies neutral."""
+
+    def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
+        def get_line(index: int) -> StyleAndTextTuples:
+            if not 0 <= index < document.line_count:
+                return []
+            line = document.lines[index]
+            match = LOG_LEVEL.match(line)
+            if match is None:
+                return [("", line)]
+            group = "thread" if match["thread"] else "level"
+            level = match[group]
+            style = (
+                "class:log.error"
+                if level in {"ERROR", "FATAL"}
+                else "class:log.warning"
+                if level in {"WARN", "WARNING"}
+                else "class:log.debug"
+                if level in {"TRACE", "DEBUG"}
+                else "class:log.level"
+            )
+            start, end = match.span(group)
+            return [("", line[:start]), (style, line[start:end]), ("", line[end:])]
+
+        return get_line
 
 
 class _ProcessInput(Protocol):
@@ -40,7 +86,7 @@ class _ProcessInput(Protocol):
 
 
 class _ProcessOutput(Protocol):
-    async def read(self, size: int = -1) -> bytes: ...
+    async def read(self, size: int = -1, /) -> bytes: ...
 
 
 class AttachProcess(Protocol):
@@ -59,6 +105,14 @@ class AttachProcess(Protocol):
 
 
 ProcessFactory = Callable[[tuple[str, ...]], Awaitable[AttachProcess]]
+
+
+class _LogControl(UIControl):
+    def __init__(self, content: Callable[[], UIContent]) -> None:
+        self._content = content
+
+    def create_content(self, width: int, height: int) -> UIContent:
+        return self._content()
 
 
 class AttachTui:
@@ -82,32 +136,44 @@ class AttachTui:
         self._closing = False
         self._disconnected = False
         self._status = "Connecting"
-        self._log_text = _clean_console_text(session.history)
+        self._stream_error = False
+        self._log_buffer = ConsoleLogBuffer(
+            MAX_ATTACH_HISTORY_BYTES, color=not color_disabled()
+        )
+        self._log_buffer.feed(session.history)
+        self._log_cursor = self._log_buffer.last_line
         self._follow_output = True
 
-        self._logs = TextArea(
-            text=self._log_text,
-            read_only=True,
-            focusable=False,
-            scrollbar=True,
+        self._logs = Window(
+            content=_LogControl(self._log_content),
+            right_margins=[ScrollbarMargin(display_arrows=True)],
             wrap_lines=True,
             style="class:console",
+            always_hide_cursor=True,
         )
         self._command = TextArea(
             height=1,
-            prompt=[("class:prompt", "❯ ")],
+            prompt=[("class:prompt", "❯ " if supports_unicode(sys.stdout) else "> ")],
             multiline=False,
             wrap_lines=False,
             accept_handler=self._accept_command,
             style="class:input",
+            input_processors=[
+                ConditionalProcessor(
+                    AfterInput([("class:input.placeholder", "Type a server command")]),
+                    filter=Condition(lambda: not self._command.text),
+                )
+            ],
         )
         self._bindings = self._create_key_bindings()
         self._application: Application[int] = Application(
             layout=Layout(self._layout(), focused_element=self._command),
             key_bindings=self._bindings,
             full_screen=True,
+            min_redraw_interval=1 / 30,
             mouse_support=False,
             style=_style(),
+            color_depth=_color_depth(),
             input=input,
             output=output,
         )
@@ -118,7 +184,7 @@ class AttachTui:
         except OSError as exc:
             raise RuntimeOperationError(f"cannot attach to Docker: {exc}") from exc
 
-        self._status = "Connected · recent history loaded"
+        self._status = "Connected | recent history loaded"
 
         def start_background_tasks() -> None:
             self._application.create_background_task(self._read_console())
@@ -144,12 +210,27 @@ class AttachTui:
                     content=_dynamic_control(self._header),
                     style="class:header",
                 ),
-                Frame(self._logs, title="Console"),
-                Window(height=1, char="─", style="class:separator"),
-                self._command,
+                Window(
+                    height=Dimension(min=1, max=3),
+                    content=_dynamic_control(self._status_line),
+                    wrap_lines=True,
+                    dont_extend_height=True,
+                    style="class:header",
+                ),
+                Frame(self._logs, title="Console")
+                if supports_unicode(sys.stdout)
+                else self._logs,
                 Window(
                     height=1,
+                    char="─" if supports_unicode(sys.stdout) else "-",
+                    style="class:separator",
+                ),
+                self._command,
+                Window(
+                    height=Dimension(min=1, max=6),
                     content=_dynamic_control(self._footer),
+                    wrap_lines=True,
+                    dont_extend_height=True,
                     style="class:footer",
                 ),
             ]
@@ -157,25 +238,50 @@ class AttachTui:
 
     def _header(self) -> StyleAndTextTuples:
         return [
-            ("class:title", f" Luminesk · {sanitize(self._session.tag)} "),
-            ("class:status", f" {sanitize(self._status)}"),
+            ("class:title", " Luminesk "),
+            ("class:header", f"| {sanitize(self._session.tag)}"),
         ]
 
+    def _status_line(self) -> StyleAndTextTuples:
+        if self._status.startswith(
+            (
+                "Action failed",
+                "Cannot send",
+                "Docker attach",
+                "Command is too large",
+                "Killing server",
+            )
+        ):
+            style = "class:status.error"
+        elif self._disconnected or self._closing:
+            style = "class:status.warning"
+        elif self._status.startswith("Connected"):
+            style = "class:status.connected"
+        else:
+            style = "class:status"
+        return [(style, f" {sanitize(self._status)}")]
+
     def _footer(self) -> StyleAndTextTuples:
-        return [
-            ("class:key", " ^C "),
-            ("class:help", "Stop  "),
-            ("class:key", " ^D "),
-            ("class:help", "Detach  "),
-            ("class:key.danger", " ^K "),
-            ("class:help", "Kill  "),
-            ("class:key", " ^L "),
-            ("class:help", "Clear  "),
-            ("class:key", " PgUp/PgDn "),
-            ("class:help", "Scroll  "),
-            ("class:key", " End "),
-            ("class:help", "Follow "),
-        ]
+        bindings = (
+            ("class:key", " ^D ", "Detach  "),
+            ("class:key.warning", " ^C ", "Stop  "),
+            ("class:key.danger", " ^K ", "Kill  "),
+            ("class:key", " ^L ", "Clear  "),
+            ("class:key", " PgUp/PgDn ", "Scroll  "),
+            ("class:key", " End ", "Follow "),
+        )
+        width = get_app().output.get_size().columns
+        fragments: StyleAndTextTuples = []
+        used = 0
+        for style, key, label in bindings:
+            # Keep each ASCII key and its meaning together on narrow terminals.
+            size = len(key) + len(label)
+            if used and used + size > width:
+                fragments.append(("class:footer", "\n"))
+                used = 0
+            fragments.extend(((style, key), ("class:help", label)))
+            used += size
+        return fragments
 
     def _create_key_bindings(self) -> KeyBindings:
         bindings = KeyBindings()
@@ -202,44 +308,40 @@ class AttachTui:
 
         @bindings.add("c-l", eager=True)
         def clear_console(event: KeyPressEvent) -> None:
-            self._log_text = ""
-            self._set_log_document(follow=True)
+            self._log_buffer.clear()
+            self._follow_output = True
+            self._logs.vertical_scroll = 0
             event.app.invalidate()
 
         @bindings.add("pageup", eager=True)
         def page_up(event: KeyPressEvent) -> None:
-            render_info = self._logs.window.render_info
+            render_info = self._logs.render_info
             if render_info is None:
                 return
             line = max(0, render_info.first_visible_line() - render_info.window_height)
-            self._logs.buffer.cursor_position = (
-                self._logs.buffer.document.translate_row_col_to_index(line, 0)
-            )
-            self._logs.window.vertical_scroll = line
+            self._log_cursor = self._log_buffer.first_line + line
+            self._logs.vertical_scroll = line
             self._follow_output = False
             event.app.invalidate()
 
         @bindings.add("pagedown", eager=True)
         def page_down(event: KeyPressEvent) -> None:
-            render_info = self._logs.window.render_info
+            render_info = self._logs.render_info
             if render_info is None:
                 return
-            last_line = self._logs.buffer.document.line_count - 1
+            last_line = self._log_buffer.line_count - 1
             line = min(
                 last_line,
                 render_info.last_visible_line() + render_info.window_height,
             )
-            self._logs.buffer.cursor_position = (
-                self._logs.buffer.document.translate_row_col_to_index(line, 0)
-            )
-            self._logs.window.vertical_scroll = line
+            self._log_cursor = self._log_buffer.first_line + line
+            self._logs.vertical_scroll = line
             self._follow_output = line == last_line
             event.app.invalidate()
 
         @bindings.add("end", eager=True)
         def follow_output(event: KeyPressEvent) -> None:
             self._follow_output = True
-            self._logs.buffer.cursor_position = len(self._log_text)
             event.app.invalidate()
 
         return bindings
@@ -315,8 +417,16 @@ class AttachTui:
         if process is None or process.stdout is None:
             return
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        while chunk := await process.stdout.read(16 * 1024):
-            self._append_log(decoder.decode(chunk))
+        try:
+            while chunk := await process.stdout.read(16 * 1024):
+                self._append_log(decoder.decode(chunk))
+                # A continuously readable pipe must still let key handling run.
+                await asyncio.sleep(0)
+        except OSError as exc:
+            self._stream_error = True
+            self._disconnected = True
+            self._status = f"Docker attach stream failed: {exc} | press Ctrl+D to exit"
+            self._application.invalidate()
         remainder = decoder.decode(b"", final=True)
         if remainder:
             self._append_log(remainder)
@@ -326,37 +436,52 @@ class AttachTui:
         if process is None:
             return
         returncode = await process.wait()
-        if self._closing:
+        if self._closing or self._stream_error:
             return
         self._disconnected = True
         self._status = (
-            "Server console disconnected · press Ctrl+D to exit"
+            "Server console disconnected | press Ctrl+D to exit"
             if returncode == 0
-            else f"Docker attach exited with code {returncode} · press Ctrl+D to exit"
+            else f"Docker attach exited with code {returncode} | press Ctrl+D to exit"
         )
         self._application.invalidate()
 
     def _append_log(self, content: str) -> None:
         if not content:
             return
-        self._log_text = _bounded_console_text(
-            self._log_text + _clean_console_text(content)
+        first_line = self._log_buffer.first_line
+        self._log_buffer.feed(content)
+        self._logs.vertical_scroll = max(
+            0, self._logs.vertical_scroll - (self._log_buffer.first_line - first_line)
         )
-        self._set_log_document(follow=self._follow_output)
         self._application.invalidate()
 
-    def _set_log_document(self, *, follow: bool) -> None:
-        cursor_position = (
-            len(self._log_text)
-            if follow
-            else min(self._logs.buffer.cursor_position, len(self._log_text))
-        )
-        self._logs.buffer.set_document(
-            Document(self._log_text, cursor_position=cursor_position),
-            bypass_readonly=True,
+    def _log_content(self) -> UIContent:
+        logs = self._log_buffer
+        if self._follow_output:
+            self._log_cursor = logs.last_line
+        self._log_cursor = min(logs.last_line, max(logs.first_line, self._log_cursor))
+        row = self._log_cursor - logs.first_line
+
+        def get_line(index: int) -> StyleAndTextTuples:
+            fragments = logs.line(index)
+            if fragments and logs.color and not logs.line_has_sgr(index):
+                text = "".join(fragment[1] for fragment in fragments)
+                return ConsoleLexer().lex_document(Document(text))(0)
+            return fragments
+
+        return UIContent(
+            get_line=get_line,
+            line_count=logs.line_count,
+            cursor_position=Point(
+                x=logs.line_length(row) if self._follow_output else 0, y=row
+            ),
+            show_cursor=False,
         )
 
     def _process_exit_code(self) -> int:
+        if self._stream_error:
+            return 1
         process = self._process
         return process.returncode if process is not None and process.returncode else 0
 
@@ -395,17 +520,6 @@ async def _open_attach_process(argv: tuple[str, ...]) -> AttachProcess:
     )
 
 
-def _clean_console_text(content: str) -> str:
-    return sanitize(content.replace("\r\n", "\n").replace("\r", "\n"))
-
-
-def _bounded_console_text(content: str) -> str:
-    encoded = content.encode("utf-8", errors="replace")
-    if len(encoded) <= MAX_ATTACH_HISTORY_BYTES:
-        return content
-    return encoded[-MAX_ATTACH_HISTORY_BYTES:].decode("utf-8", errors="replace")
-
-
 def _dynamic_control(
     value: Callable[[], StyleAndTextTuples],
 ):
@@ -415,18 +529,4 @@ def _dynamic_control(
 
 
 def _style() -> Style:
-    return Style.from_dict(
-        {
-            "header": "bg:#1f2937 #d1d5db",
-            "title": "bold #93c5fd",
-            "status": "#9ca3af",
-            "console": "#d1d5db bg:#111827",
-            "separator": "#374151 bg:#111827",
-            "input": "#f3f4f6 bg:#111827",
-            "prompt": "bold #93c5fd",
-            "footer": "bg:#1f2937 #d1d5db",
-            "key": "bold #93c5fd bg:#374151",
-            "key.danger": "bold #fca5a5 bg:#374151",
-            "help": "#d1d5db bg:#1f2937",
-        }
-    )
+    return Style.from_dict(prompt_styles())

@@ -290,6 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--dir", default=None, help="Instance directory.")
     _input_options(start)
     start.add_argument("--no-wait", action="store_true", help="Skip readiness checks.")
+    start.add_argument(
+        "--attach",
+        action="store_true",
+        help="Open the interactive console after start (also for a running server).",
+    )
     _automation_options(start)
     start.set_defaults(handler="luminesk_cli.cli.commands.runtime:start")
 

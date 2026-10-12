@@ -22,6 +22,7 @@ from luminesk_cli.domain.manifest import (
     SourceSpec,
     parse_manifest,
 )
+from luminesk_cli.domain.progress import ProgressEvent, observe_progress
 from luminesk_cli.infrastructure.cache import ContentCache
 from luminesk_cli.infrastructure.oci import OciImageResolver
 from luminesk_cli.infrastructure.sources.common import (
@@ -650,14 +651,17 @@ def test_metadata_response_is_not_decoded_twice() -> None:
         )
     )
 
-    response = request_metadata(
-        client,
-        "https://api.example/metadata.json",
-        source,
-    )
+    events: list[ProgressEvent] = []
+    with observe_progress(events.append):
+        response = request_metadata(
+            client,
+            "https://api.example/metadata.json",
+            source,
+        )
 
     assert response.content == content
     assert "content-encoding" not in response.headers
+    assert events == [ProgressEvent("metadata"), ProgressEvent("resolve")]
 
 
 def test_metadata_http_failures_have_stable_network_error() -> None:
@@ -686,8 +690,14 @@ def test_oci_resolver_pulls_and_selects_matching_repository_digest() -> None:
         del kwargs
         calls.append(argv)
 
-        if argv[1:3] == ["image", "inspect"] and len(calls) == 1:
-            return subprocess.CompletedProcess(argv, 1, "", "missing")
+        if argv[1] == "info":
+            return subprocess.CompletedProcess(argv, 0, "linux/amd64", "")
+
+        if argv[1:3] == ["image", "inspect"] and len(calls) == 2:
+            return subprocess.CompletedProcess(argv, 1, "", "No such image")
+
+        if argv[-1] == "{{.Os}}/{{.Architecture}}":
+            return subprocess.CompletedProcess(argv, 0, "linux/amd64", "")
 
         if argv[1] == "pull":
             return subprocess.CompletedProcess(argv, 0, "", "")
@@ -700,10 +710,24 @@ def test_oci_resolver_pulls_and_selects_matching_repository_digest() -> None:
             "",
         )
 
-    result = OciImageResolver(runner).resolve("registry.example/team/server:2.0")
+    events: list[ProgressEvent] = []
+    with observe_progress(events.append):
+        result = OciImageResolver(runner).resolve("registry.example/team/server:2.0")
 
     assert result == f"registry.example/team/server@sha256:{'d' * 64}"
-    assert calls[1] == ["docker", "pull", "registry.example/team/server:2.0"]
+    assert calls[2] == [
+        "docker",
+        "pull",
+        "--platform",
+        "linux/amd64",
+        "registry.example/team/server:2.0",
+    ]
+    assert events == [
+        ProgressEvent("engine"),
+        ProgressEvent("image-inspect"),
+        ProgressEvent("image"),
+        ProgressEvent("image-inspect"),
+    ]
 
 
 @pytest.mark.parametrize(

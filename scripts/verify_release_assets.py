@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import stat
 import sys
+import zipfile
 from pathlib import Path
 
-INSTALLER_ASSETS = {
-    "luminesk_cli-linux-amd64",
-    "luminesk_cli-linux-arm64",
-    "luminesk_cli-darwin-amd64",
-    "luminesk_cli-darwin-arm64",
-    "luminesk_cli-windows-amd64.exe",
-    "luminesk_cli-windows-arm64.exe",
-}
 BUNDLE_ASSETS = {
     "luminesk-linux-amd64.zip",
     "luminesk-linux-arm64.zip",
@@ -26,6 +20,40 @@ BUNDLE_ASSETS = {
 CHECKSUM_RE = re.compile(r"^([0-9a-f]{64}) [ *]([^/\\]+)$")
 
 
+def verify_bundle(path: Path) -> None:
+    """Reject truncated or structurally incomplete platform ZIPs before release."""
+    executable = "nesk.exe" if "windows" in path.name else "nesk"
+    with zipfile.ZipFile(path) as archive:
+        members = archive.infolist()
+        names = {member.filename for member in members}
+        required = {f"nesk/{executable}", "nesk/_internal/", "nesk/.bundle-manifest"}
+        if not required <= names or len(names) != len(members):
+            raise SystemExit(f"incomplete or duplicate bundle members: {path.name}")
+        if len(members) > 20001 or sum(m.file_size for m in members) > 2 * 1024**3:
+            raise SystemExit(f"bundle exceeds extraction limits: {path.name}")
+        for member in members:
+            parts = member.filename.rstrip("/").split("/")
+            if parts[0] != "nesk" or any(
+                re.fullmatch(r"[A-Za-z0-9_,+.-]+", part) is None or part in {".", ".."}
+                for part in parts
+            ):
+                raise SystemExit(f"unsafe bundle path: {member.filename}")
+            kind = stat.S_IFMT(member.external_attr >> 16)
+            if kind not in {stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK}:
+                raise SystemExit(f"special bundle member: {member.filename}")
+            if kind == stat.S_IFLNK and "windows" in path.name:
+                raise SystemExit("Windows bundle must not require symlink privileges")
+        if archive.getinfo("nesk/.bundle-manifest").file_size > 4 * 1024**2:
+            raise SystemExit("bundle inventory exceeds extraction limit")
+        if "windows" not in path.name and not (
+            archive.getinfo(f"nesk/{executable}").external_attr >> 16 & 0o111
+        ):
+            raise SystemExit("POSIX bundle entry point must be executable")
+        damaged = archive.testzip()
+        if damaged is not None:
+            raise SystemExit(f"damaged bundle member: {damaged}")
+
+
 def verify(root: Path) -> None:
     if not root.is_dir() or root.is_symlink():
         raise SystemExit(f"release asset directory is invalid: {root}")
@@ -34,7 +62,7 @@ def verify(root: Path) -> None:
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise SystemExit(f"release asset must be a non-empty regular file: {path}")
     names = {path.name for path in paths}
-    required = INSTALLER_ASSETS | BUNDLE_ASSETS | {"luminesk-cli.cdx.json"}
+    required = BUNDLE_ASSETS | {"luminesk-cli.cdx.json"}
     missing = sorted(required - names)
     if missing:
         raise SystemExit(f"release assets are missing: {', '.join(missing)}")
@@ -68,6 +96,8 @@ def verify(root: Path) -> None:
         actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
         if checksums[name] != actual:
             raise SystemExit(f"release asset checksum mismatch: {name}")
+        if name in BUNDLE_ASSETS:
+            verify_bundle(root / name)
 
 
 def main(argv: list[str]) -> int:
@@ -76,8 +106,7 @@ def main(argv: list[str]) -> int:
     root = Path(argv[0]).resolve()
     verify(root)
     print(
-        f"Verified {len(INSTALLER_ASSETS)} installer binaries, "
-        f"{len(BUNDLE_ASSETS)} bundles, Python artifacts, SBOM, and checksums."
+        f"Verified {len(BUNDLE_ASSETS)} onedir bundles, Python artifacts, SBOM, and checksums."
     )
     return 0
 

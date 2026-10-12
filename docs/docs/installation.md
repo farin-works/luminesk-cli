@@ -22,8 +22,8 @@ the GitHub API, limits what it downloads, and pins the selected commit.
 
 ## Install with one command
 
-The one-line installer downloads the self-contained binary, so Python is not
-required.
+The one-line installer downloads the self-contained onedir ZIP bundle, so
+Python is not required.
 
 On Linux or macOS:
 
@@ -41,8 +41,10 @@ The installer:
 
 - detects the operating system and AMD64/ARM64 architecture;
 - selects the matching asset from the latest GitHub release;
-- requires a valid SHA-256 digest in the release metadata and verifies the
-  download before installation;
+- requires SHA-256 from GitHub release metadata (Windows) or the release
+  `SHA256SUMS` (Linux/macOS), and verifies the ZIP before extracting any files;
+- checks the complete bundle inventory, file hashes, imports (including
+  `prompt_toolkit`), version, and help before activating a new version;
 - refuses to overwrite a `nesk` owned by uv, pipx, or a manual installation.
 
 In the Unix command, `--yes` is an installer option: piping occupies standard
@@ -51,11 +53,28 @@ approves only installing the Luminesk executable. It does not accept the
 Minecraft EULA, provide a recipe input, or approve a later `nesk install` or
 `nesk update` plan. The PowerShell command asks before writing.
 
-A normal Linux/macOS user installation goes to `~/.local/bin/nesk`; a root
-installation uses `/usr/local/bin/nesk`. A normal Windows installation goes to
-`$HOME\.local\bin\nesk.exe`; an Administrator installation uses
-`$env:ProgramFiles\luminesk\nesk.exe`. If the installer warns that this
-directory is missing from `PATH`, add it and open a new terminal.
+A normal user installation needs no administrator rights or installed Python.
+On Linux/macOS, `~/.local/bin/nesk` is a symlink into
+`~/.local/share/luminesk/app/versions/<version>-<installation-id>/nesk/`.
+On Windows, `~/.local/bin/nesk.cmd` forwards to the equivalent version directory,
+using a relative path so Unicode home directories work. The launcher forwards
+arguments and standard streams, and returns the application's exit code.
+The executable and its `_internal` directory always stay together; `_internal`
+is never added to `PATH`.
+
+A root Unix installation uses `/usr/local/bin/nesk` and
+`/usr/local/share/luminesk/app`. An elevated Windows installation uses
+`$env:ProgramFiles\luminesk\nesk.cmd` and an adjacent `app` directory, with
+metadata under `$env:ProgramData\luminesk`. Run updates at the same privilege
+level as the original installation. An installation owned by another manager,
+or a different `nesk` earlier in `PATH`, is a conflict and is not overwritten.
+
+Windows adds the launcher directory to the corresponding persistent PATH and
+the current PowerShell environment. Unix configures user shell profiles if
+`~/.local/bin` is missing; open a new terminal after the first installation.
+A piped shell child cannot change the environment of its parent shell.
+Linux/macOS installation requires `curl`, `unzip`, standard POSIX utilities,
+and `sha256sum` or `shasum`. Docker is only needed to operate servers.
 
 Run the same one-line command later to check for and install an update. To
 remove an installation owned by the script, use:
@@ -139,15 +158,50 @@ keep its executable and adjacent `_internal` directory together.
 - On Windows, add the extracted `nesk` directory to the user `Path` in System
   Properties, then open a new PowerShell window.
 
-The same release also contains standalone assets named
-`luminesk_cli-linux-*`, `luminesk_cli-darwin-*`, and
-`luminesk_cli-windows-*.exe`. The one-line installer uses those assets. Prefer
-the ZIP when you want the transparent onedir layout, or uv when you want
-Python-managed upgrades.
+The official installer uses these same ZIPs. Releases no longer publish the
+standalone PyInstaller onefile executables. Wheel and source distributions
+remain available for uv and pipx.
 
-To upgrade a bundle, verify and extract the new complete bundle, then replace
-the old bundle directory. Instances and the content cache are outside the
-program directory.
+## Updates, migration, and recovery
+
+Each installation extracts into a private staging directory, checks the
+inventory and every regular file's SHA-256, and runs smoke tests. POSIX links
+are created only after regular files and directories; their targets must resolve
+inside the bundle. Windows rejects archive links and special files. Downloads,
+entry counts, inventory size, and expanded file sizes are bounded.
+
+A successful attempt moves the complete bundle to a new version directory.
+Unix activates it by atomically replacing the `nesk` symlink. Windows atomically
+replaces the CMD launcher and restores the previous launcher and metadata if
+activation fails. Download and validation failures leave the current command
+untouched. Old versions are retained, including on reinstall, to avoid disturbing
+running processes. Do not manually replace only the executable.
+
+Existing onefile installations are migrated automatically when their
+`.metadata_one_line` declares `installed_via=one-line-script` and the exact
+expected binary path. The legacy executable is retained in the new version
+directory. On Unix its inode is retained by a hardlink, so `bin` and `app`
+must be on the same filesystem for legacy migration. No prior uninstall is required. Metadata for another path does not
+grant ownership of a uv/pipx executable.
+
+Only one installer may operate on an installation at a time. Windows uses an
+OS-held file lock that is released on process termination. Unix uses an atomic
+lock directory. If a Unix installer is killed without cleanup or the machine
+loses power, the old command or the fully checked new command remains active;
+check that no installer is still running, then remove only
+`app/install.lock` with `rmdir` and rerun the same installer. Never remove an
+active installer's lock. Interrupted staging directories and retained versions
+may consume disk space; the installer does not prune them during updates.
+
+`--delete` removes installer-owned program versions, the entry point, and its
+metadata. Instances, worlds, plugins, configuration, and content caches are not
+removed. Shared binary directories and unrelated files in them are preserved.
+If a version directory contains files outside its recorded installation inventory,
+uninstall stops before removing the command; move those user files elsewhere first.
+Close running `nesk` processes before uninstalling. Windows checks for locked
+application files; Unix requires `lsof` and refuses removal if files are in use
+or the inspection cannot complete. PATH entries and shell profile lines are retained
+because these directories may also contain other tools.
 
 ## Platform notes
 

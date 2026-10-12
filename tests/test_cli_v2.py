@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from io import StringIO
@@ -18,8 +19,10 @@ from luminesk_cli.domain.preview import Preview
 from luminesk_cli.infrastructure.recipe_snapshot import create_recipe_snapshot
 from luminesk_cli.infrastructure.state import load_state
 
+pytestmark = pytest.mark.usefixtures("docker_engine")
 
-def test_human_output_uses_restrained_semantic_colors() -> None:
+
+def test_human_output_uses_brand_semantic_colors() -> None:
     from luminesk_cli.cli.output import THEME, human_message
 
     stream = StringIO()
@@ -44,9 +47,9 @@ def test_human_output_uses_restrained_semantic_colors() -> None:
     rendered = stream.getvalue()
 
     assert "\x1b[" in rendered
-    assert "38;2;122;162;200m" in rendered
-    assert "38;2;127;174;131m" in rendered
-    assert "38;2;200;169;107m" in rendered
+    assert "38;2;255;51;121m" in rendered
+    assert "38;2;0;210;106m" in rendered
+    assert "38;2;255;200;61m" in rendered
     assert message.plain == (
         "Install preview\n"
         "  Runtime image: example/server@sha256:" + "a" * 64 + "\n"
@@ -79,7 +82,42 @@ def test_version_cold_path_does_not_import_heavy_dependencies() -> None:
     )
 
     assert result.returncode == 0
-    assert result.stdout == "Luminesk 2.0.2\n\n"
+    assert result.stdout == "Luminesk 2.1.0\n\n"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--help"],
+        ["list", "--json"],
+        ["catalog", "status", "--json"],
+        ["doctor", "--json"],
+    ],
+)
+def test_local_commands_do_not_load_network_build_or_tui(
+    arguments: list[str], tmp_path: Path
+) -> None:
+    script = (
+        "import sys,shutil; shutil.which=lambda name: None; "
+        "from luminesk_cli.cli.entry import main; "
+        f"\ntry: main({arguments!r})\nexcept SystemExit: pass\n"
+        "for name in ('httpx','rich','prompt_toolkit','luminesk_cli.application.locking',"
+        "'luminesk_cli.infrastructure.build','luminesk_cli.infrastructure.oci'):"
+        "\n assert name not in sys.modules, name\n"
+    )
+    env = dict(
+        os.environ,
+        WIN_PD_OVERRIDE_LOCAL_APPDATA=str(tmp_path),
+        WIN_PD_OVERRIDE_APPDATA=str(tmp_path),
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_doctor_reports_healthy_cli_and_daemon(monkeypatch, capsys) -> None:
@@ -99,6 +137,32 @@ def test_doctor_reports_healthy_cli_and_daemon(monkeypatch, capsys) -> None:
 
     assert [item["component"] for item in payload["checks"]] == ["docker"]
     assert payload["checks"][0]["daemonReachable"] is True
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_json_stays_clean_on_a_color_terminal(
+    available: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from luminesk_cli.cli.commands import doctor
+
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(
+        doctor.shutil, "which", lambda executable: "/docker" if available else None
+    )
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "{}", ""),
+    )
+
+    assert main(["doctor", "--json", "--non-interactive"]) == (0 if available else 8)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "\x1b" not in captured.out
+    assert json.loads(captured.out)["ok"] is available
 
 
 def test_debug_diagnostics_use_stderr_without_changing_json(
@@ -400,6 +464,8 @@ command = ["server"]
 
     captured = capsys.readouterr()
     assert "Configure inputs for Wizard Fixture" in captured.out
+    assert captured.out.count("Input 1 of 2") == 1
+    assert captured.out.count("Input 2 of 2") == 1
     assert "Accept the Minecraft EULA" in captured.out
     assert "Server name" in captured.out
     assert "must be true/false or yes/no" in captured.err

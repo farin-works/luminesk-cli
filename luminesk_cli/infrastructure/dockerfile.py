@@ -62,6 +62,8 @@ def resolve_build_images(
     recipe_root: Path,
     build: Build,
     resolver: OciImageResolver,
+    *,
+    target: str | None = None,
 ) -> dict[str, str]:
     dockerfile = (recipe_root / build.file).resolve()
 
@@ -69,7 +71,8 @@ def resolve_build_images(
         raise SecurityError("Dockerfile escapes recipe root")
 
     return {
-        image: resolver.resolve(image) for image in dockerfile_base_images(dockerfile)
+        image: resolver.resolve(image, target=target)
+        for image in dockerfile_base_images(dockerfile)
     }
 
 

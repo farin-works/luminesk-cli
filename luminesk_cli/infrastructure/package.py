@@ -17,6 +17,7 @@ from luminesk_cli.domain.package import (
     parse_package_metadata,
 )
 from luminesk_cli.domain.primitives import safe_relative_path
+from luminesk_cli.domain.progress import report_progress
 from luminesk_cli.infrastructure.cache import digest_file
 
 METADATA_NAME = "metadata.json"
@@ -85,6 +86,7 @@ def write_package(
     finally:
         temporary.unlink(missing_ok=True)
 
+    report_progress("verify")
     return verify_package(path)
 
 

@@ -14,14 +14,32 @@ nesk [-h] [-v | --version] [--debug] COMMAND ...
 help. Run `nesk COMMAND --help` or `nesk catalog COMMAND --help` for parser help
 from the installed release.
 
-Human-oriented output uses a restrained color palette when stdout or stderr is
-an interactive terminal. Redirected output stays plain, and the standard
-`NO_COLOR` environment variable disables color explicitly. Color and layout do
-not affect `--json` responses. Long downloads, resolution, package builds,
-transactions, cache scans, Docker startup, and readiness waits show an animated
-status on interactive stderr. These indicators are disabled for redirected
-output, `--json`, `--non-interactive`, and `--debug`, so automation and detailed
-diagnostic logs remain stable.
+Human-oriented output uses the Luminesk pink accent for headings and prompts,
+green for success, yellow for warnings, and red-pink for errors. Rich output and
+the full-screen console share the same palette. True-color terminals use the
+brand colors; other terminals use the nearest supported colors. Redirected
+output stays plain, even with `FORCE_COLOR`. Setting `NO_COLOR` (including an
+empty value) disables color. Color and layout do not affect `--json` responses.
+
+Interactive progress distinguishes metadata requests, version resolution,
+artifact downloads, OCI image pulls, SHA-256 verification, package builds,
+transaction application, server startup, and readiness checks. Downloads show
+actual decoded bytes and a total when available; readiness shows completed
+checks. A known positive total produces a progress bar and percentage for the
+current transfer or check sequence, not the entire installation. The operation
+name remains visible above backend sub-stages. OCI layer downloads and extraction
+use Docker's counters when available. Operations without a valid total show a
+spinner and any available count, without an estimated percentage. Docker may
+also pull a missing locked image during startup. Installation itself does not
+start the server; use `nesk start` afterwards.
+
+The input wizard numbers the remaining inputs and keeps each prompt's type,
+required/optional status, default, and constraints together. Validation errors
+keep the current step active until the input is accepted.
+
+Animated status uses stderr and is disabled when either output stream is
+redirected, or with `NO_COLOR`, `TERM=dumb`, `--json`, `--non-interactive`, or
+`--debug`. Errors retain their diagnostics; use `--debug` for stage-level logs.
 
 ## Shared automation options
 
@@ -337,12 +355,29 @@ omitted, Luminesk searches the current directory and its parents for
 
 ```text
 nesk start [--dir DIR] [--set KEY=VALUE]...
-  [--set-file KEY=PATH]... [--no-wait] [--json] [--non-interactive]
+  [--set-file KEY=PATH]... [--no-wait] [--attach] [--json] [--non-interactive]
 ```
 
 Creates the instance container from the locked image and normally waits for
 readiness. Input overrides affect this start only; `--no-wait` skips readiness
 and is intended for diagnosis.
+
+`--attach` opens the full-screen console after a successful start and readiness.
+For an already running server, it attaches to the existing container without
+restarting it. `--no-wait --attach` skips readiness and opens the console after
+Docker starts. Input overrides apply only when creating a container.
+
+```bash
+nesk start --dir ./servers/lumi --attach
+# From inside an instance:
+nesk start --attach
+```
+
+This requires interactive stdin and stdout and rejects `--json` and
+`--non-interactive` before starting Docker. Start/readiness failures do not open
+the TUI; readiness failure retains the usual cleanup. An attach failure after
+successful start leaves the server running. Console hotkeys are identical to
+[`nesk attach`](#nesk-attach).
 
 ### `nesk stop`
 
@@ -395,6 +430,20 @@ live output. Enter sends a server command. The footer exposes `Ctrl+C` to stop,
 `Ctrl+D` to detach without stopping, `Ctrl+K` to kill, `Ctrl+L` to clear the
 local view, and scrolling keys. It requires a real terminal and rejects
 `--json` and `--non-interactive`.
+
+The dark header keeps connection status separate from the instance name. Logs
+preserve server ANSI SGR colors (16-color, 256-color, and truecolor), with
+terminal-appropriate color degradation. Bold, italic, underline, and resets are
+supported; dim and unsupported attributes degrade to normal text. Plain logs
+retain severity-label highlighting. The command line
+has a distinct background and an empty-input hint, and Stop/Kill
+shortcuts use warning/error colors. The footer wraps key-and-action pairs in
+narrow terminals. `NO_COLOR` keeps the layout and textual status without color;
+full-screen cursor control still requires a terminal. Only SGR styles are
+interpreted: OSC titles, clipboard operations, hyperlinks, cursor movement,
+screen clearing, and other server control sequences are discarded. Colors stay
+inside the log pane. Unicode and split UTF-8/ANSI sequences are decoded
+incrementally; CRLF and standalone CR appear as line breaks.
 
 ## Diagnostics, cache, and instance discovery
 

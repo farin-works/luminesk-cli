@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import re
 import socket
@@ -13,7 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
+from luminesk_cli.domain.errors import (
+    ResolutionError,
+    RuntimeOperationError,
+    ValidationError,
+)
 from luminesk_cli.domain.inputs import (
     interpolate_input_references,
     resolve_inputs,
@@ -23,6 +29,9 @@ from luminesk_cli.domain.instance import InstanceState, RuntimeState
 from luminesk_cli.domain.lockfile import LOCKFILE_NAME, Lockfile, load_lockfile
 from luminesk_cli.domain.manifest import Check, Manifest, RuntimePort, load_manifest
 from luminesk_cli.domain.primitives import safe_absolute_posix_path, safe_relative_path
+from luminesk_cli.domain.progress import report_progress
+from luminesk_cli.infrastructure.docker_process import docker_failure, run_docker
+from luminesk_cli.infrastructure.oci import OciImageResolver
 from luminesk_cli.infrastructure.recipe_snapshot import load_verified_installed_recipe
 from luminesk_cli.infrastructure.state import load_state, write_state
 
@@ -50,6 +59,7 @@ class DockerRuntime:
     def __init__(self, runner: CommandRunner | None = None) -> None:
         self._runner = runner or subprocess.run
         self._bounded_log_capture = runner is None
+        self._image_resolver = OciImageResolver(runner)
 
     def start(
         self,
@@ -83,6 +93,12 @@ class DockerRuntime:
             require_required=False,
         )
         LOGGER.debug("runtime input validation completed values=%d", len(values))
+        try:
+            self._image_resolver.ensure_available(
+                lockfile.runtime.image, lockfile.target
+            )
+        except ResolutionError as exc:
+            raise RuntimeOperationError(str(exc)) from exc
         container_name = _container_name(state)
         self._run(["docker", "rm", "--force", container_name], check=False)
         command = build_run_argv(
@@ -91,6 +107,7 @@ class DockerRuntime:
             lockfile.runtime.image,
             container_name,
             values,
+            target=lockfile.target,
         )
         LOGGER.debug(
             "runtime Docker argv prepared mounts=%d ports=%d arguments=%d",
@@ -98,12 +115,20 @@ class DockerRuntime:
             len(manifest.runtime.ports),
             len(command),
         )
-        result = self._run(command, check=False)
+        report_progress("start")
+        try:
+            result = self._run(command, check=False)
+        except BaseException:
+            # An interrupted/timed-out client may already have created the container.
+            try:
+                self._run(["docker", "rm", "--force", container_name], check=False)
+            except RuntimeOperationError:
+                LOGGER.debug("Docker start cleanup failed; container may need removal")
+            raise
 
         if result.returncode != 0:
             raise RuntimeOperationError(
-                "Docker failed to start the instance",
-                stderr=result.stderr[-4000:],
+                docker_failure("start", result.stderr or result.stdout),
                 exit_code=result.returncode,
             )
 
@@ -165,6 +190,7 @@ class DockerRuntime:
                 identifier,
             ],
             check=False,
+            timeout=manifest.runtime.stop_timeout + 30,
         )
 
         if result.returncode != 0 and self.is_running(identifier):
@@ -330,6 +356,11 @@ class DockerRuntime:
             ["docker", "inspect", "--format", "{{.State.Running}}", identifier],
             check=False,
         )
+        if result.returncode:
+            diagnostic = (result.stderr or result.stdout).lower()
+            if "no such object" in diagnostic or "no such container" in diagnostic:
+                return False
+            raise RuntimeOperationError(docker_failure("inspect", diagnostic))
         return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
     def wait_ready(
@@ -353,6 +384,7 @@ class DockerRuntime:
 
         LOGGER.debug("runtime readiness checks prepared count=%d", len(checks))
         for index, check in enumerate(checks):
+            report_progress("ready", completed=index, total=len(checks), unit="checks")
             LOGGER.debug(
                 "runtime readiness check started index=%d kind=%s required=%s",
                 index,
@@ -360,6 +392,9 @@ class DockerRuntime:
                 check.required,
             )
             self._wait_check(root, state, check, values)
+            report_progress(
+                "ready", completed=index + 1, total=len(checks), unit="checks"
+            )
             LOGGER.debug("runtime readiness check completed index=%d", index)
 
     def check_readiness(self, root: Path) -> InstanceState:
@@ -452,6 +487,7 @@ class DockerRuntime:
         argv: Sequence[str],
         *,
         check: bool,
+        timeout: float = 60,
     ) -> subprocess.CompletedProcess[str]:
         operation = argv[1] if len(argv) > 1 else "unknown"
         LOGGER.debug(
@@ -461,20 +497,31 @@ class DockerRuntime:
             check,
         )
         try:
-            result = self._runner(
-                argv,
-                check=check,
-                capture_output=True,
-                text=True,
-                shell=False,
-            )
+            if self._bounded_log_capture:
+                result = run_docker(argv, timeout=timeout)
+            else:
+                result = self._runner(
+                    argv,
+                    check=check,
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                    timeout=timeout,
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeOperationError(
+                f"Docker {operation} timed out after {timeout:g}s; "
+                "check Docker Desktop/WSL2 and the active context",
+                operation=operation,
+                timeout=timeout,
+            ) from exc
         except (OSError, subprocess.CalledProcessError) as exc:
             LOGGER.debug(
                 "Docker command raised operation=%s exception_type=%s",
                 operation,
                 type(exc).__name__,
             )
-            raise RuntimeOperationError(f"Docker command failed: {exc}") from exc
+            raise RuntimeOperationError(docker_failure(operation, "")) from exc
         LOGGER.debug(
             "Docker command completed operation=%s exit_code=%d",
             operation,
@@ -518,12 +565,15 @@ def build_run_argv(
     image: str,
     container_name: str,
     values: Mapping[str, str | int | bool],
+    *,
+    target: str | None = None,
 ) -> tuple[str, ...]:
     runtime = manifest.runtime
     command = [
         "docker",
         "run",
         "--detach",
+        "--pull=never",
         "--interactive",
         "--name",
         container_name,
@@ -532,6 +582,8 @@ def build_run_argv(
         "--stop-signal",
         runtime.stop_signal,
     ]
+    if target is not None:
+        command.extend(("--platform", target))
 
     if runtime.memory is not None:
         memory = _interpolate(runtime.memory, values)
@@ -585,10 +637,14 @@ def build_run_argv(
             _interpolate(mount.target, values),
             f"runtime.mounts[{index}].target",
         )
-        mount_option = f"type=bind,src={source},dst={target}"
-
+        # Docker parses --mount as CSV, even when passed as one argv element.
+        # Quote whole fields so commas/quotes in a Windows directory stay literal.
+        fields = ["type=bind", f"src={source}", f"dst={target}"]
         if mount.mode == "ro":
-            mount_option += ",readonly"
+            fields.append("readonly")
+        buffer = io.StringIO()
+        csv.writer(buffer, lineterminator="").writerow(fields)
+        mount_option = buffer.getvalue()
 
         command.extend(("--mount", mount_option))
 
@@ -701,35 +757,19 @@ def _run_bounded_logs(
     argv: Sequence[str],
 ) -> subprocess.CompletedProcess[str]:
     try:
-        process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=False,
+        return run_docker(
+            argv, timeout=30, output_limit=MAX_LOG_OUTPUT_BYTES, merge_stderr=True
         )
+    except BufferError as exc:
+        raise _oversized_log_error() from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeOperationError(
+            "Docker logs timed out after 30s; check Docker Desktop/WSL2 and the active context"
+        ) from exc
     except OSError as exc:
-        raise RuntimeOperationError(f"cannot read Docker logs: {exc}") from exc
-
-    output = bytearray()
-    assert process.stdout is not None
-    try:
-        while chunk := process.stdout.read(64 * 1024):
-            output.extend(chunk)
-            if len(output) > MAX_LOG_OUTPUT_BYTES:
-                _terminate_log_process(process)
-                raise _oversized_log_error()
-    except OSError as exc:
-        _terminate_log_process(process)
-        raise RuntimeOperationError(f"cannot read Docker logs: {exc}") from exc
-    finally:
-        process.stdout.close()
-
-    return subprocess.CompletedProcess(
-        argv,
-        process.wait(),
-        bytes(output).decode("utf-8", errors="replace"),
-        "",
-    )
+        raise RuntimeOperationError(
+            "cannot read Docker logs; check Docker Engine"
+        ) from exc
 
 
 def _validate_log_output_size(output: str) -> None:
@@ -742,12 +782,3 @@ def _oversized_log_error() -> RuntimeOperationError:
         "Docker log output exceeds 4 MiB; reduce --tail or narrow --since",
         limit=MAX_LOG_OUTPUT_BYTES,
     )
-
-
-def _terminate_log_process(process: subprocess.Popen[bytes]) -> None:
-    process.terminate()
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()

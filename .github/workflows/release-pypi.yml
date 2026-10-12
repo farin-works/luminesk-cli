@@ -8,7 +8,7 @@ on:
       release_tag:
         description: Version to validate and build without publishing
         required: true
-        default: v2.0.2
+        default: v2.1.0
         type: string
 
 permissions:
@@ -124,22 +124,16 @@ jobs:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
-            installer_asset: luminesk_cli-linux-amd64
           - name: linux-arm64
             runner: ubuntu-24.04-arm
-            installer_asset: luminesk_cli-linux-arm64
           - name: macos-arm64
             runner: macos-latest
-            installer_asset: luminesk_cli-darwin-arm64
           - name: macos-amd64
             runner: macos-15-intel
-            installer_asset: luminesk_cli-darwin-amd64
           - name: windows-amd64
             runner: windows-latest
-            installer_asset: luminesk_cli-windows-amd64
           - name: windows-arm64
             runner: windows-11-arm
-            installer_asset: luminesk_cli-windows-arm64
     permissions:
       contents: read
       id-token: write
@@ -172,6 +166,8 @@ jobs:
           --name nesk
           --collect-all luminesk_cli
           --collect-all platformdirs
+          --collect-all prompt_toolkit
+          --runtime-hook scripts/bundle_runtime_hook.py
           --exclude-module tkinter
           luminesk_cli/__main__.py
 
@@ -180,29 +176,9 @@ jobs:
         run: |
           EXECUTABLE="dist/nesk/nesk"
           if [[ "$RUNNER_OS" == "Windows" ]]; then EXECUTABLE="${EXECUTABLE}.exe"; fi
+          "$EXECUTABLE" --_bundle-check
           "$EXECUTABLE" --version
           "$EXECUTABLE" --help
-          "$EXECUTABLE" catalog status --json
-
-      - name: Build one-file installer asset
-        shell: bash
-        run: >-
-          uv run pyinstaller
-          --onefile
-          --name "${{ matrix.installer_asset }}"
-          --distpath artifacts
-          --workpath build/installer-${{ matrix.name }}
-          --collect-all luminesk_cli
-          --collect-all platformdirs
-          --exclude-module tkinter
-          luminesk_cli/__main__.py
-
-      - name: Smoke test one-file installer asset
-        shell: bash
-        run: |
-          EXECUTABLE="artifacts/${{ matrix.installer_asset }}"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then EXECUTABLE="${EXECUTABLE}.exe"; fi
-          "$EXECUTABLE" --version
           "$EXECUTABLE" catalog status --json
 
       - name: Archive bundle
@@ -210,6 +186,11 @@ jobs:
           uv run python scripts/archive_bundle.py
           "dist/nesk"
           "artifacts/luminesk-${{ matrix.name }}.zip"
+
+      - name: Exercise installers with the built onedir application
+        env:
+          LUMINESK_TEST_BUNDLE: dist/nesk
+        run: uv run --extra dev pytest tests/test_installers.py --strict-config --strict-markers -W error::ResourceWarning
 
       - name: Attest bundle artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
@@ -286,7 +267,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Check out release notes
+      - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -310,6 +291,5 @@ jobs:
             release-assets/* \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
-            --notes-file RELEASE_NOTES.md \
             --generate-notes \
             "${PRERELEASE[@]}"

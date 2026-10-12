@@ -65,7 +65,8 @@ def collect_recipe_inputs(
         "Press Enter to keep a default or skip an optional input.",
         tone="info",
     )
-    for spec in pending:
+    for index, spec in enumerate(pending, start=1):
+        print_human(f"Input {index} of {len(pending)}", tone="info")
         values.update(_prompt_for_input(manifest, spec, values))
 
     resolve_inputs(manifest, values)
@@ -77,7 +78,7 @@ def _prompt_for_input(
     spec: InputSpec,
     values: dict[str, InputValue],
 ) -> dict[str, InputValue]:
-    print_human(_input_description(spec), tone="plain")
+    print_human(_input_description(spec), tone="heading")
 
     while True:
         try:

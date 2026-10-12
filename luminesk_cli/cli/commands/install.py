@@ -26,7 +26,7 @@ from luminesk_cli.domain.preview import Preview
 from luminesk_cli.domain.primitives import PACKAGE_NAME_RE
 from luminesk_cli.domain.recipe import RecipeSnapshot
 from luminesk_cli.infrastructure.catalog import CatalogClient
-from luminesk_cli.infrastructure.platform import current_platform
+from luminesk_cli.infrastructure.platform import container_platform
 from luminesk_cli.infrastructure.recipe import (
     acquire_github_recipe,
     ensure_empty_target,
@@ -90,7 +90,8 @@ def run(namespace: Any) -> int:
         locator = database_locator(catalog.revision, entry.name)
         if namespace.frozen:
             LOGGER.debug("database recipe cache load started frozen=true")
-            cached = recipe_cache().load_locator(locator, current_platform())
+            with activity(namespace, "Connecting to Docker Engine"):
+                cached = recipe_cache().load_locator(locator, container_platform())
             return _install_snapshot(
                 namespace,
                 cached.snapshot,
@@ -122,7 +123,8 @@ def run(namespace: Any) -> int:
     locator = github_locator(source.canonical, source.requested_ref)
     if namespace.frozen:
         LOGGER.debug("github recipe cache load started frozen=true")
-        cached = recipe_cache().load_locator(locator, current_platform())
+        with activity(namespace, "Connecting to Docker Engine"):
+            cached = recipe_cache().load_locator(locator, container_platform())
         return _install_snapshot(
             namespace,
             cached.snapshot,
