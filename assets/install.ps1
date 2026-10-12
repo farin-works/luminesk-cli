@@ -1,339 +1,290 @@
-<#
-.SYNOPSIS
-    Luminesk One-Line Installer/Uninstaller for Windows.
-.DESCRIPTION
-    Handles installation, version checking, conflict detection, and uninstallation.
-#>
-
-$ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
-# Initialize colors (ANSI Escape Sequences)
-$esc = [char]27
-$COLOR_RESET      = "${esc}[0m"
-$COLOR_BOLD       = "${esc}[1m"
-$COLOR_PRIMARY    = "${esc}[38;2;255;0;88m"
-$COLOR_SUCCESS    = "${esc}[38;2;0;210;106m"
-$COLOR_WARNING    = "${esc}[38;2;255;200;61m"
-$COLOR_SECONDARY  = "${esc}[38;2;179;179;184m"
-$COLOR_BORDER     = "${esc}[38;2;42;42;48m"
-
-# Parse arguments
-$ASSUME_YES = $false
-$DELETE_MODE = $false
-foreach ($arg in $args) {
-    if ($arg -eq "-y" -or $arg -eq "--yes") { $ASSUME_YES = $true }
-    if ($arg -eq "-d" -or $arg -eq "--delete") { $DELETE_MODE = $true }
+<# Official Windows onedir installer; compatible with Windows PowerShell 5.1. #>
+$ErrorActionPreference = 'Stop'
+$AssumeYes = $false; $DeleteMode = $false
+foreach ($argument in $args) {
+    switch ($argument) {
+        { $_ -in '-y', '--yes' } { $AssumeYes = $true }
+        { $_ -in '-d', '--delete' } { $DeleteMode = $true }
+        default { throw "Unknown installer option: $argument" }
+    }
 }
-
-function Get-MetaVal ($filePath, $key) {
-    if (-not (Test-Path $filePath)) { return $null }
-    $lines = Get-Content $filePath -ErrorAction SilentlyContinue
-    foreach ($line in $lines) {
-        if ($line -match "^$key=(.*)$") {
-            return $Matches[1].Trim()
+function Confirm-Action([string]$Message) {
+    if ($AssumeYes) { return $true }
+    return (Read-Host "$Message [y/N]") -match '^(y|yes)$'
+}
+function Assert-NoLinks([string]$Path) {
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            if ((Get-Item -Force -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point in installation path: $cursor" }
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+}
+function Read-Metadata([string]$Path) {
+    $result = @{}
+    if (Test-Path -LiteralPath $Path) {
+        Assert-NoLinks $Path
+        foreach ($line in [IO.File]::ReadAllLines($Path)) {
+            if ($line -match '^([^=]+)=(.*)$') {
+                if ($result.ContainsKey($Matches[1])) { throw 'Duplicate installation metadata key' }
+                $result[$Matches[1]] = $Matches[2]
+            }
         }
     }
-    return $null
+    return $result
 }
-
-function Confirm-Action ($Prompt) {
-    if ($ASSUME_YES) { return $true }
-    $msg = "${COLOR_BOLD}${Prompt} [y/N]: ${COLOR_RESET}"
-    Write-Host $msg -NoNewline
-    $response = Read-Host
-    if ($response -match '^[yY](es)?$') { return $true }
-    return $false
-}
-
-function Compare-SemVer ($v1, $v2) {
+function Write-Atomic([string]$Path, [string]$Text) {
+    $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
     try {
-        $parsed1 = [version]$v1
-        $parsed2 = [version]$v2
-        return $parsed1.CompareTo($parsed2)
-    } catch {
-        return [string]::Compare($v1, $v2)
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+        $stream = [IO.File]::Open($temporary, 'CreateNew', 'Write', 'None')
+        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $Path) }
+    } finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
+}
+function Get-Sha([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Receive-VerifiedHost([string]$Url, [string]$Destination, [long]$Limit) {
+    # Explicit redirects, bounded streaming, and no ambient credentials.
+    for ($redirect = 0; $redirect -le 5; $redirect++) {
+        if ($Url -notmatch '^https://(?:api\.github\.com/repos/task-v1/luminesk-cli/releases/latest|github\.com/task-v1/luminesk-cli/releases/download/[^?#]+|release-assets\.githubusercontent\.com/[^\r\n]*)$') { throw 'Release asset has an invalid download URL' }
+        $request = [Net.HttpWebRequest]::Create($Url)
+        $request.AllowAutoRedirect = $false
+        $request.UserAgent = 'Luminesk-Installer'
+        $request.Timeout = 300000
+        $request.ReadWriteTimeout = 300000
+        $response = $request.GetResponse()
+        try {
+            if ([int]$response.StatusCode -in 301,302,303,307,308) { $Url = $response.Headers['Location']; continue }
+            if ([int]$response.StatusCode -ne 200 -or $response.ContentLength -gt $Limit) { throw 'Invalid or oversized download' }
+            $inputStream = $response.GetResponseStream()
+            $outputStream = [IO.File]::Create($Destination)
+            try {
+                $buffer = New-Object byte[] 65536
+                [long]$total = 0
+                while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $total += $count
+                    if ($total -gt $Limit) { throw 'Download size limit exceeded' }
+                    $outputStream.Write($buffer, 0, $count)
+                }
+                $outputStream.Flush($true)
+            } finally { $outputStream.Dispose(); $inputStream.Dispose() }
+            return
+        } finally { $response.Dispose() }
     }
+    throw 'Too many download redirects'
 }
-
-# Determine architecture
-$OS = "windows"
-$rawArchCandidates = @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE)
-$RAW_ARCH = ""
-foreach ($cand in $rawArchCandidates) {
-    if ($cand) { $RAW_ARCH = $cand.ToLower(); break }
+function Expand-Bundle([string]$ArchivePath, [string]$Destination) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        if ($zip.Entries.Count -gt 20001) { throw 'Too many ZIP members' }
+        $entries = @{}; [long]$total = 0
+        foreach ($entry in $zip.Entries) {
+            $name = $entry.FullName
+            if ($name -notmatch '^nesk/(?:[A-Za-z0-9_,+.-]+/)*[A-Za-z0-9_,+.-]+/?$' -or $name -match '(^|/)\.{1,2}(/|$)' -or $name -match '(^|/)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])([./]|$)' -or $name -match '[. ](/|$)') { throw "Unsafe ZIP path: $name" }
+            $key = $name.TrimEnd('/')
+            if ($entries.ContainsKey($key)) { throw 'Duplicate or case-colliding ZIP member' }
+            $type = ($entry.ExternalAttributes -shr 16) -band 0xF000
+            if ($type -notin 0x8000,0x4000 -or (($type -eq 0x4000) -ne $name.EndsWith('/'))) { throw 'Links and special ZIP members are forbidden on Windows' }
+            $total += $entry.Length
+            if ($entry.Length -gt 536870912 -or $total -gt 2147483648) { throw 'Expanded bundle size limit exceeded' }
+            $entries[$key] = $entry
+        }
+        $inventory = $entries['nesk/.bundle-manifest']
+        if (-not $inventory -or $inventory.Length -gt 4194304) { throw 'Missing or oversized bundle inventory' }
+        $reader = [IO.StreamReader]::new($inventory.Open(), [Text.Encoding]::ASCII)
+        try { $manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $records = @{}; $expectedCount = 1
+        foreach ($line in ($manifest -split "`n")) {
+            if (-not $line) { continue }
+            if ($line -notmatch '^(F|D) (644|755) ([0-9]{1,10}) ([0-9a-f]{64}|-) ([A-Za-z0-9_,+./-]+)$') { throw 'Invalid bundle inventory' }
+            $kind = $Matches[1]; $mode = $Matches[2]; $size = [long]$Matches[3]; $digest = $Matches[4]; $path = $Matches[5]
+            $name = "nesk/$path"; $entry = $entries[$name]
+            if (-not $entry -or $records.ContainsKey($path) -or $entry.Length -ne $size -or ($kind -eq 'D') -ne $entry.FullName.EndsWith('/')) { throw 'ZIP structure does not match inventory' }
+            if (($kind -eq 'F' -and $digest -eq '-') -or ($kind -eq 'D' -and ($size -ne 0 -or $digest -ne '-' -or $mode -ne '755'))) { throw 'Invalid inventory record' }
+            $records[$path] = @{ Kind=$kind; Digest=$digest; Entry=$entry }
+            $expectedCount++
+        }
+        if ($expectedCount -ne $entries.Count -or $records['nesk.exe'].Kind -ne 'F' -or $records['_internal'].Kind -ne 'D') { throw 'Incomplete onedir bundle' }
+        foreach ($path in $records.Keys) {
+            $parent = [IO.Path]::GetDirectoryName($path.Replace('/', '\'))
+            while ($parent) {
+                if ($records[$parent.Replace('\','/')].Kind -ne 'D') { throw 'Undeclared or non-directory ZIP parent' }
+                $parent = [IO.Path]::GetDirectoryName($parent)
+            }
+        }
+        [IO.Directory]::CreateDirectory((Join-Path $Destination "nesk")) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $Destination "nesk/.bundle-manifest"), $manifest, [Text.Encoding]::ASCII)
+        foreach ($path in $records.Keys) {
+            $record = $records[$path]
+            $output = Join-Path $Destination "nesk/$path"
+            if ($record.Kind -eq 'D') { [IO.Directory]::CreateDirectory($output) | Out-Null; continue }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($output)) | Out-Null
+            $sourceStream = $record.Entry.Open(); $targetStream = [IO.File]::Create($output)
+            try {
+                $buffer = New-Object byte[] 65536; [long]$written = 0
+                while (($count = $sourceStream.Read($buffer,0,$buffer.Length)) -gt 0) {
+                    $written += $count
+                    if ($written -gt $record.Entry.Length) { throw 'ZIP member exceeds declared size' }
+                    $targetStream.Write($buffer,0,$count)
+                }
+                $targetStream.Flush($true)
+            } finally { $targetStream.Dispose(); $sourceStream.Dispose() }
+            if ((Get-Sha $output) -ne $record.Digest) { throw "Damaged bundle file: $path" }
+        }
+    } finally { $zip.Dispose() }
 }
-
-$ARCH = ""
-switch ($RAW_ARCH) {
-    "amd64"   { $ARCH = "amd64" }
-    "x86_64"  { $ARCH = "amd64" }
-    "x64"     { $ARCH = "amd64" }
-    "arm64"   { $ARCH = "arm64" }
-    default {
-        $errMsg = "${COLOR_PRIMARY}Error: Unsupported architecture: ${RAW_ARCH}${COLOR_RESET}"
-        Write-Error $errMsg
-        exit 1
-    }
+function Test-Bundle([string]$Executable, [string]$Version) {
+    & $Executable --_bundle-check
+    if ($LASTEXITCODE -ne 0) { throw 'Bundle import smoke test failed' }
+    $reported = & $Executable --version
+    if ($LASTEXITCODE -ne 0 -or "$reported" -notmatch ([regex]::Escape($Version) + '(?:\s|$)')) { throw 'Bundle version smoke test failed' }
+    & $Executable --help | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Bundle help smoke test failed' }
 }
-
-$BINARY_NAME = "luminesk_cli-$OS-$ARCH.exe"
-
-# Check administrator privileges
+$rawArch = $env:PROCESSOR_ARCHITEW6432
+if (-not $rawArch) { $rawArch = $env:PROCESSOR_ARCHITECTURE }
+switch ($rawArch) { { $_ -in 'AMD64','x86_64','x64' } { $arch='amd64' }; 'ARM64' { $arch='arm64' }; default { throw "Unsupported architecture: $rawArch" } }
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-if ($isAdmin) {
-    $INSTALL_DIR = "$env:ProgramFiles\luminesk"
-    $SYSTEM_META_DIR = "$env:ProgramData\luminesk"
-    $SYSTEM_META_FILE = Join-Path $SYSTEM_META_DIR ".metadata_one_line"
-} else {
-    $INSTALL_DIR = "$HOME\.local\bin"
-    $USER_META_DIR = "$HOME\.local\share\luminesk"
-    $USER_META_FILE = Join-Path $USER_META_DIR ".metadata_one_line"
-}
-$TARGET_PATH = Join-Path $INSTALL_DIR "nesk.exe"
-
-# Paths to check
-$SYS_META = "$env:ProgramData\luminesk\.metadata_one_line"
-$USR_META = "$HOME\.local\share\luminesk\.metadata_one_line"
-
-# Analyze environment
-Write-Host "${COLOR_PRIMARY}Luminesk analyzing system environment...${COLOR_RESET}"
-
-$cmd = Get-Command nesk -ErrorAction SilentlyContinue
-if (-not $cmd) { $cmd = Get-Command nesk.exe -ErrorAction SilentlyContinue }
-$EXISTING_BIN = $null
-if ($cmd) { $EXISTING_BIN = $cmd.Source }
-
-$IS_SCRIPT_INSTALL = $false
-if ((Test-Path $SYS_META) -and ((Get-MetaVal $SYS_META "installed_via") -eq "one-line-script")) {
-    $IS_SCRIPT_INSTALL = $true
-} elseif ((Test-Path $USR_META) -and ((Get-MetaVal $USR_META "installed_via") -eq "one-line-script")) {
-    $IS_SCRIPT_INSTALL = $true
-}
-
-# Hard fail when a foreign installation is detected
-if ($EXISTING_BIN -and -not $IS_SCRIPT_INSTALL) {
-    Write-Host "${COLOR_BORDER}+----------------------------------------------------------${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET} ${COLOR_PRIMARY}${COLOR_BOLD}FOREIGN INSTALLATION DETECTED${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}+----------------------------------------------------------${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET} 'nesk' is already installed at: ${COLOR_WARNING}${EXISTING_BIN}${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET} It was NOT installed via this one-line script."
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET} ${COLOR_BOLD}Please resolve this conflict manually!${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET} Depending on how you installed it, try checking:"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET}   - ${COLOR_SECONDARY}uv tool list${COLOR_RESET} / ${COLOR_SECONDARY}uvx${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET}   - ${COLOR_SECONDARY}pipx list${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET}   - ${COLOR_SECONDARY}pip list${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET}"
-    Write-Host "${COLOR_BORDER}|${COLOR_RESET} Clean up the previous installation and try again."
-    Write-Host "${COLOR_BORDER}+----------------------------------------------------------${COLOR_RESET}"
-    exit 1
-}
-
-# --- UNINSTALL MODE (-d / --delete) ---
-if ($DELETE_MODE) {
-    if (-not $EXISTING_BIN -and -not $IS_SCRIPT_INSTALL) {
-        Write-Host "${COLOR_WARNING}Luminesk is not installed on this system.${COLOR_RESET}"
-        exit 0
+$bin = Join-Path $HOME '.local\bin'; $state = Join-Path $HOME '.local\share\luminesk'
+$relativeRoot = '..\share\luminesk\app'
+if ($isAdmin) { $bin = Join-Path $env:ProgramFiles 'luminesk'; $state = Join-Path $env:ProgramData 'luminesk'; $relativeRoot = 'app' }
+$root = [IO.Path]::GetFullPath((Join-Path $bin $relativeRoot))
+$metadataPath = Join-Path $state '.metadata_one_line'
+$launcher = Join-Path $bin 'nesk.cmd'; $legacy = Join-Path $bin 'nesk.exe'
+Assert-NoLinks $bin; Assert-NoLinks $state; Assert-NoLinks $root
+[IO.Directory]::CreateDirectory($bin) | Out-Null
+[IO.Directory]::CreateDirectory($state) | Out-Null
+[IO.Directory]::CreateDirectory($root) | Out-Null
+$lock = $null; $work = $null
+try {
+    # An OS-held lock is released even after termination or power loss. Keep the
+    # file: deleting an open lock creates competing lock domains on POSIX hosts.
+    Assert-NoLinks (Join-Path $root 'install.lock')
+    try { $lock = [IO.File]::Open((Join-Path $root 'install.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+    catch { throw 'Another installation is active. Retry after it finishes.' }
+    $metadata = Read-Metadata $metadataPath
+    $owned = $metadata.installed_via -eq 'one-line-script' -and $metadata.binary -in $legacy,$launcher
+    if ($metadata.Count -and -not $owned) { throw 'Foreign installation metadata' }
+    $existing = Get-Command nesk -ErrorAction SilentlyContinue
+    if ($existing -and (-not $owned -or $existing.Source -notin $launcher,$legacy)) { throw "Foreign installation: $($existing.Source). Check uv tool list / pipx list." }
+    foreach ($entry in @($launcher,$legacy)) {
+        Assert-NoLinks $entry
+        if ([IO.File]::Exists($entry) -and -not $owned) { throw "Refusing to overwrite unowned $entry" }
     }
-
-    if (-not (Confirm-Action "Are you sure you want to completely remove Luminesk?")) {
-        Write-Host "Uninstallation cancelled."
-        exit 0
+    if ([IO.File]::Exists($legacy) -and $metadata.layout -eq 'onedir') {
+        if (-not $metadata.legacy_sha -or (Get-Sha $legacy) -ne $metadata.legacy_sha) { throw 'Foreign executable at the legacy entry point' }
     }
-
-    Write-Host "Uninstalling Luminesk..."
-
-    # Remove user installation
-    if (Test-Path $USR_META) {
-        $metaBin = Get-MetaVal $USR_META "binary"
-        if (-not $metaBin) { $metaBin = "$HOME\.local\bin\nesk.exe" }
-        Write-Host "Removing user binary and metadata..."
-        Remove-Item -Force $metaBin -ErrorAction SilentlyContinue
-        Remove-Item -Force $USR_META -ErrorAction SilentlyContinue
-        $parentDir = Split-Path $USR_META
-        if ((Test-Path $parentDir) -and (Get-ChildItem $parentDir).Count -eq 0) {
-            Remove-Item -Path $parentDir -ErrorAction SilentlyContinue
+    if ([IO.File]::Exists($launcher)) {
+        if ((Get-Sha $launcher) -notin $metadata.launcher_sha,$metadata.previous_launcher_sha) { throw 'Managed launcher was replaced by a foreign file' }
+    }
+    if ($DeleteMode) {
+        if (-not $owned) { Write-Host 'Luminesk is not installed.'; return }
+        if (-not (Confirm-Action 'Remove the installer-owned application (keep instances and cache)?')) { return }
+        $versions = Join-Path $root 'versions'; Assert-NoLinks $versions
+        $directories = @(Get-ChildItem -LiteralPath $versions -Directory -ErrorAction SilentlyContinue)
+        foreach ($directory in $directories) {
+            Assert-NoLinks $directory.FullName
+            if (-not [IO.File]::Exists((Join-Path $directory.FullName '.owned'))) { throw "Unowned version directory: $directory" }
+            $inventoryPath = Join-Path $directory.FullName '.installed-files'
+            Assert-NoLinks $inventoryPath
+            if (-not [IO.File]::Exists($inventoryPath)) { throw "Missing ownership inventory: $directory" }
+            $ownedPaths = @{}
+            foreach ($relative in [IO.File]::ReadAllLines($inventoryPath)) { $ownedPaths[$relative] = $true }
+            foreach ($file in (Get-ChildItem -LiteralPath $directory.FullName -Recurse -Force)) {
+                $relative = $file.FullName.Substring($directory.FullName.Length + 1).Replace('\','/')
+                if (-not $ownedPaths.ContainsKey($relative)) { throw "Unexpected user files in $directory; move them outside the application before uninstalling." }
+                Assert-NoLinks $file.FullName
+                if (-not $file.PSIsContainer) {
+                    try { $probe = [IO.File]::Open($file.FullName,'Open','ReadWrite','None'); $probe.Dispose() }
+                    catch { throw 'Application files are in use. Close running nesk processes and retry removal.' }
+                }
+            }
         }
-    }
-
-    # Remove system installation
-    if (Test-Path $SYS_META) {
-        $metaBin = Get-MetaVal $SYS_META "binary"
-        if (-not $metaBin) { $metaBin = "$env:ProgramFiles\luminesk\nesk.exe" }
-        Write-Host "Removing system binary and metadata..."
-        Remove-Item -Force $metaBin -ErrorAction SilentlyContinue
-        Remove-Item -Force $SYS_META -ErrorAction SilentlyContinue
-        $parentDir = Split-Path $SYS_META
-        if ((Test-Path $parentDir) -and (Get-ChildItem $parentDir).Count -eq 0) {
-            Remove-Item -Path $parentDir -ErrorAction SilentlyContinue
+        foreach ($entry in @($launcher,$legacy)) { if ([IO.File]::Exists($entry)) { [IO.File]::Delete($entry) } }
+        foreach ($directory in $directories) {
+            $resolved = [IO.Path]::GetFullPath($directory.FullName)
+            if ([IO.Path]::GetDirectoryName($resolved) -ne $versions) { throw 'Invalid removal scope' }
+            Remove-Item -LiteralPath $resolved -Recurse -Force
         }
+        [IO.File]::Delete($metadataPath)
+        Write-Host 'Luminesk uninstalled; instances and cache were preserved.'
+        return
     }
-
-    Write-Host "${COLOR_SUCCESS}Success: Luminesk has been successfully uninstalled.${COLOR_RESET}"
-    exit 0
-}
-# ---------------------------------------
-
-# Determine local version
-$LOCAL_VER = ""
-if ($EXISTING_BIN) {
+    $work = Join-Path $root ('.stage.' + [guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($work) | Out-Null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Receive-VerifiedHost 'https://api.github.com/repos/task-v1/luminesk-cli/releases/latest' "$work\release.json" 4194304
+    $release = Get-Content -Raw -LiteralPath "$work\release.json" | ConvertFrom-Json
+    if ($release.tag_name -notmatch '^v?(\d+\.\d+\.\d+(?:(?:a|b|rc)[1-9][0-9]*)?)$') { throw 'Invalid release version' }
+    $version = $Matches[1]; $assetName = "luminesk-windows-$arch.zip"
+    $assets = @($release.assets | Where-Object { $_.name -eq $assetName })
+    if ($assets.Count -ne 1) { throw 'Release must contain exactly one matching onedir ZIP' }
+    $targetAsset = $assets[0]
+    $expectedUrl = "https://github.com/task-v1/luminesk-cli/releases/download/$($release.tag_name)/$assetName"
+    if ($targetAsset.browser_download_url -cne $expectedUrl) { throw 'Release asset has an invalid download URL' }
+    if ($targetAsset.digest -cnotmatch '^sha256:([0-9a-f]{64})$') { throw 'Release asset has no valid SHA-256 digest' }
+    $expectedSha = $Matches[1]
+    if ($existing) { & $existing.Source --version; if ($LASTEXITCODE -ne 0) { throw 'Existing command failed' } }
+    if (-not (Confirm-Action "Install Luminesk $version (windows-$arch)?")) { return }
+    Receive-VerifiedHost $expectedUrl "$work\bundle.zip" 536870912
+    if ((Get-Sha "$work\bundle.zip") -ne $expectedSha) { throw 'Checksum verification failed' }
+    Expand-Bundle "$work\bundle.zip" $work
+    Test-Bundle "$work\nesk\nesk.exe" $version
+    $versions = Join-Path $root 'versions'; Assert-NoLinks $versions
+    [IO.Directory]::CreateDirectory($versions) | Out-Null
+    $id = "$version-$([guid]::NewGuid().ToString('N'))"
+    $destination = Join-Path $versions $id
+    [IO.Directory]::CreateDirectory($destination) | Out-Null
+    [IO.File]::WriteAllText("$destination\.owned", 'one-line-script')
+    [IO.Directory]::Move("$work\nesk", "$destination\nesk")
+    $ownedPaths = @('.owned', '.installed-files', 'nesk', 'nesk/.bundle-manifest')
+    foreach ($line in [IO.File]::ReadAllLines("$destination\nesk\.bundle-manifest")) {
+        $ownedPaths += 'nesk/' + ($line -split ' ')[4]
+    }
+    if ([IO.File]::Exists($legacy)) { $ownedPaths += 'legacy-nesk.exe' }
+    [IO.File]::WriteAllLines("$destination\.installed-files", [string[]]$ownedPaths, [Text.Encoding]::ASCII)
+    Test-Bundle "$destination\nesk\nesk.exe" $version
+    # Relative ASCII target keeps Unicode home directories out of CMD source.
+    # Disable delayed expansion, forward the original argument tail and exit code.
+    $launcherText = "@echo off`r`nsetlocal DisableDelayedExpansion`r`n`"%~dp0$relativeRoot\versions\$id\nesk\nesk.exe`" %*`r`nexit /b %errorlevel%`r`n"
+    [IO.File]::WriteAllText("$work\next.cmd", $launcherText, [Text.UTF8Encoding]::new($false))
+    $oldLauncher = if ([IO.File]::Exists($launcher)) { [IO.File]::ReadAllText($launcher) } else { $null }
+    $oldMetadata = if ([IO.File]::Exists($metadataPath)) { [IO.File]::ReadAllText($metadataPath) } else { $null }
+    $previousSha = if ($oldLauncher) { Get-Sha $launcher } else { '' }
+    $legacySha = if ([IO.File]::Exists($legacy)) { Get-Sha $legacy } else { '' }
+    $newMetadata = "installed_via=one-line-script`nlayout=onedir`nversion=$version`nbinary=$launcher`nlauncher_sha=$(Get-Sha "$work\next.cmd")`nprevious_launcher_sha=$previousSha`nlegacy_sha=$legacySha`n"
+    $migrated = $false
     try {
-        $rawVer = & $EXISTING_BIN -v 2>$null | Out-String
-        if ($rawVer -match 'v?(\d+\.\d+(?:\.\d+)?)') { $LOCAL_VER = $Matches[1] }
-    } catch {}
-}
-
-# Fetch release info from GitHub API
-$REMOTE_VER = ""
-$EXPECTED_SHA = ""
-$DOWNLOAD_URL = ""
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $headers = @{ "User-Agent" = "Luminesk-Installer" }
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/task-v1/luminesk-cli/releases/latest" -Headers $headers -ErrorAction Stop
-    if ($release.tag_name -notmatch '^v?(\d+\.\d+\.\d+(?:(?:a|b|rc)[1-9][0-9]*)?)$') {
-        throw "Release metadata has no valid version tag."
-    }
-    $REMOTE_VER = $Matches[1]
-    $targetAssets = @($release.assets | Where-Object { $_.name -eq $BINARY_NAME })
-    if ($targetAssets.Count -ne 1) {
-        throw "Release metadata must contain exactly one $BINARY_NAME asset."
-    }
-    $targetAsset = $targetAssets[0]
-    if ($targetAsset.digest -notmatch '^sha256:([0-9a-f]{64})$') {
-        throw "Release asset has no valid SHA-256 digest."
-    }
-    $EXPECTED_SHA = $Matches[1]
-    if ($targetAsset.browser_download_url -notmatch '^https://github\.com/task-v1/luminesk-cli/releases/download/') {
-        throw "Release asset has an invalid download URL."
-    }
-    $DOWNLOAD_URL = $targetAsset.browser_download_url
-} catch {
-    Write-Error "Could not load verified release metadata: $_"
-    exit 1
-}
-
-$NEEDS_UPDATE = $false
-$STATUS_TXT = "Not installed"
-$STATUS_COLOR = $COLOR_WARNING
-
-if ($LOCAL_VER) {
-    if ($REMOTE_VER) {
-        $cmp = Compare-SemVer $LOCAL_VER $REMOTE_VER
-        if ($cmp -eq 0) {
-            $STATUS_TXT = "Up to date (v$LOCAL_VER)"
-            $STATUS_COLOR = $COLOR_SUCCESS
-        } elseif ($cmp -lt 0) {
-            $STATUS_TXT = "Outdated (v$LOCAL_VER -> v$REMOTE_VER)"
-            $STATUS_COLOR = $COLOR_PRIMARY
-            $NEEDS_UPDATE = $true
-        } else {
-            $STATUS_TXT = "Newer local (v$LOCAL_VER)"
-            $STATUS_COLOR = $COLOR_SUCCESS
+        # Both old/new launcher hashes are recorded before the atomic replacement,
+        # so interruption on either side leaves a recognized working entry point.
+        Write-Atomic $metadataPath $newMetadata
+        Write-Atomic $launcher $launcherText
+        if ([IO.File]::Exists($legacy)) {
+            [IO.File]::Move($legacy, "$destination\legacy-nesk.exe")
+            $migrated = $true
         }
-    } else {
-        $STATUS_TXT = "Installed (v$LOCAL_VER)"
-        $STATUS_COLOR = $COLOR_SUCCESS
+        & $launcher --version
+        if ($LASTEXITCODE -ne 0) { throw 'Activated launcher smoke test failed' }
+    } catch {
+        if ($migrated) { [IO.File]::Move("$destination\legacy-nesk.exe", $legacy) }
+        if ($oldLauncher) { Write-Atomic $launcher $oldLauncher } elseif ([IO.File]::Exists($launcher)) { [IO.File]::Delete($launcher) }
+        if ($oldMetadata) { Write-Atomic $metadataPath $oldMetadata } elseif ([IO.File]::Exists($metadataPath)) { [IO.File]::Delete($metadataPath) }
+        throw
     }
-}
-
-# Output analysis results
-Write-Host "${COLOR_BORDER}+----------------------------------------------------------${COLOR_RESET}"
-$statusLine = "${COLOR_BORDER}|${COLOR_RESET} {0,-14} : {1}{2}{3}" -f "Status", $STATUS_COLOR, $STATUS_TXT, $COLOR_RESET
-Write-Host $statusLine
-Write-Host "${COLOR_BORDER}+----------------------------------------------------------${COLOR_RESET}"
-
-if (-not $NEEDS_UPDATE -and $LOCAL_VER) {
-    Write-Host "Luminesk satisfies the latest release constraints."
-    if (-not (Confirm-Action "Do you want to force reinstall/overwrite it?")) {
-        Write-Host "Installation cancelled."
-        exit 0
-    }
-}
-
-if (-not (Confirm-Action "Do you want to proceed with the installation?")) {
-    Write-Host "Installation cancelled."
-    exit 0
-}
-
-# Download and install binary
-if (-not (Test-Path $INSTALL_DIR)) {
-    New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
-}
-
-$tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + ".exe")
-
-Write-Host "Downloading Luminesk binary ($BINARY_NAME)..."
-try {
-    $oldProgress = $ProgressPreference
-    $ProgressPreference = "SilentlyContinue"
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $webReqHeaders = @{ "User-Agent" = "Luminesk-Installer" }
-    Invoke-WebRequest -Uri $DOWNLOAD_URL -OutFile $tempFile -UseBasicParsing -Headers $webReqHeaders
-} catch {
-    Write-Host "${COLOR_PRIMARY}Error downloading binary: $_${COLOR_RESET}"
-    if (Test-Path $tempFile) { Remove-Item -Force $tempFile -ErrorAction SilentlyContinue }
-    exit 1
+    $scope = if ($isAdmin) { 'Machine' } else { 'User' }
+    $savedPath = [Environment]::GetEnvironmentVariable('Path', $scope)
+    if ($bin -notin ($savedPath -split ';')) { [Environment]::SetEnvironmentVariable('Path', "$bin;$savedPath", $scope) }
+    if ($bin -notin ($env:Path -split ';')) { $env:Path = "$bin;$env:Path" }
+    Write-Host "Luminesk $version installed. Previous versions retained for running processes."
 } finally {
-    $ProgressPreference = $oldProgress
-}
-
-if (-not (Test-Path $tempFile) -or (Get-Item $tempFile).Length -eq 0) {
-    Write-Host "${COLOR_PRIMARY}Error: Downloaded file is empty or missing.${COLOR_RESET}"
-    if (Test-Path $tempFile) { Remove-Item -Force $tempFile -ErrorAction SilentlyContinue }
-    exit 1
-}
-
-Write-Host "Verifying checksum..."
-$actualSha = (Get-FileHash -Path $tempFile -Algorithm SHA256).Hash.ToLower()
-if ($actualSha -ne $EXPECTED_SHA.ToLower()) {
-    Write-Host "${COLOR_PRIMARY}Error: Checksum verification failed.${COLOR_RESET}"
-    Write-Host "Expected: $EXPECTED_SHA"
-    Write-Host "Actual:   $actualSha"
-    Remove-Item -Force $tempFile -ErrorAction SilentlyContinue
-    exit 1
-}
-Write-Host "${COLOR_SUCCESS}Checksum verified successfully.${COLOR_RESET}"
-
-try {
-    Move-Item -Path $tempFile -Destination $TARGET_PATH -Force
-} catch {
-    Write-Host "${COLOR_PRIMARY}Error moving binary to target path ${TARGET_PATH}: $_${COLOR_RESET}"
-    if (Test-Path $tempFile) { Remove-Item -Force $tempFile -ErrorAction SilentlyContinue }
-    exit 1
-}
-
-# Create proof metadata file
-Write-Host "Creating installation metadata..."
-$now = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-$metaDir = $USER_META_DIR
-if ($isAdmin) { $metaDir = $SYSTEM_META_DIR }
-$metaFile = $USER_META_FILE
-if ($isAdmin) { $metaFile = $SYSTEM_META_FILE }
-
-if (-not (Test-Path $metaDir)) { New-Item -ItemType Directory -Path $metaDir -Force | Out-Null }
-
-$verStr = "unknown"
-if ($REMOTE_VER) { $verStr = $REMOTE_VER }
-$metaLines = @(
-    "installed_via=one-line-script",
-    "version=$verStr",
-    "binary=$TARGET_PATH",
-    "installed_at=$now"
-)
-[System.IO.File]::WriteAllLines($metaFile, $metaLines, [System.Text.Encoding]::UTF8)
-
-Write-Host "${COLOR_SUCCESS}Success: Luminesk has been successfully installed.${COLOR_RESET}"
-
-# Check PATH variable
-$currentPath = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
-if ($currentPath -like "*$INSTALL_DIR*") {
-    Write-Host "Run setup tasks with: nesk --help"
-} else {
-    Write-Host "${COLOR_WARNING}Warning: ${INSTALL_DIR} is not in your PATH environment variable.${COLOR_RESET}"
-    Write-Host "To add it, run this command in PowerShell as Administrator:"
-    $envCmd = "  [Environment]::SetEnvironmentVariable(`"Path`", [Environment]::GetEnvironmentVariable(`"Path`",`"User`") + `";$INSTALL_DIR`", `"User`")"
-    Write-Host $envCmd
+    if ($work -and [IO.Directory]::Exists($work)) {
+        $resolved = [IO.Path]::GetFullPath($work)
+        if ([IO.Path]::GetDirectoryName($resolved) -eq $root -and [IO.Path]::GetFileName($resolved).StartsWith('.stage.')) {
+            Remove-Item -LiteralPath $resolved -Recurse -Force
+        }
+    }
+    if ($lock) { $lock.Dispose() }
 }

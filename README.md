@@ -34,8 +34,8 @@ You need Docker Engine or Docker Desktop. Git is not required for normal use.
 On Windows, use Docker Desktop with Linux containers (WSL2). Recipe platforms
 refer to the Docker Engine's OS/architecture; Lumi's `runtime_uid` and
 `runtime_gid` select a Linux container identity, not a Windows account.
-The quickest installation uses the self-contained release binary and does not
-require Python.
+The quickest installation uses the self-contained onedir release bundle and
+does not require Python.
 
 Linux or macOS:
 
