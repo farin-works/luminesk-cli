@@ -35,6 +35,7 @@
     "@docusaurus/module-type-aliases": "3.10.2",
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",
+    "@swc/html": "1.15.47",
     "@types/react": "^19.2.18",
     "typescript": "~6.0.3"
   },
