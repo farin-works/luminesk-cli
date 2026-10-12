@@ -5,6 +5,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.document import Document
 from prompt_toolkit.input.defaults import create_pipe_input
@@ -72,16 +73,29 @@ def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
                 input=pipe_input,
                 output=terminal,
             )
+            rendered = asyncio.Event()
+            disconnected = asyncio.Event()
+            rows: list[str] = []
+
+            def on_render(application: Application[int]) -> None:
+                screen = application.renderer._last_screen
+                if screen is None:
+                    return
+                current_rows = [
+                    "".join(screen.data_buffer[y][x].char for x in range(width))
+                    for y in range(24)
+                ]
+                if not rendered.is_set() and "Readable log" in "\n".join(current_rows):
+                    rows.extend(current_rows)
+                    rendered.set()
+                if "disconnected" in tui._status_line()[0][1]:
+                    disconnected.set()
+
+            tui._application.after_render += on_render
             task = asyncio.create_task(tui.run())
-            await asyncio.sleep(0.1)
-            screen = tui._application.renderer._last_screen
-            assert screen is not None
-            rows = [
-                "".join(screen.data_buffer[y][x].char for x in range(width))
-                for y in range(24)
-            ]
+            await asyncio.wait_for(rendered.wait(), 2)
             process.finish(0)
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(disconnected.wait(), 2)
             assert tui._status_line()[0][0] == "class:status.warning"
             assert "disconnected" in tui._status_line()[0][1]
             pipe_input.send_bytes(b"\x04")
