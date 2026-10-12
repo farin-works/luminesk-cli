@@ -91,6 +91,19 @@ nesk attach --dir ./servers/example
 `attach` opens a full-screen console with recent history and live output. Type
 a server command and press Enter. Use `Ctrl+D` to detach while leaving the
 server running, `Ctrl+C` to stop it gracefully, or `Ctrl+K` to kill it.
+`Ctrl+L` clears the local view, `PageUp`/`PageDown` scroll, and `End` follows
+new output. Server ANSI colors are rendered safely; `NO_COLOR` disables color.
+
+To start and open the same console in one command:
+
+```bash
+nesk start --dir ./servers/lumi --attach
+```
+
+This waits for readiness, then attaches. If the server is already running,
+it opens that container's console without restarting it. Inside the instance,
+use `nesk start --attach`. A real terminal is required; `--attach` rejects
+`--json` and `--non-interactive` before starting the server.
 
 Editable server configs are normally created by the server on its first start.
 Official recipes do not seed partial `server.properties`-style files. Stop the

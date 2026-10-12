@@ -42,6 +42,20 @@ nesk logs --dir ./instance --follow
 
 ## Observe
 
+To start and enter the interactive console in one step:
+
+```bash
+nesk start --dir ./servers/lumi --attach
+```
+
+Inside an instance, `nesk start --attach` discovers the directory automatically.
+It waits for readiness before attaching; `--no-wait --attach` skips that wait.
+If the server is already running, the console opens on its existing container
+without a restart or another container. Input overrides do not reconfigure a
+running container. JSON, non-interactive mode, or missing stdin/stdout TTYs are
+rejected before start. A failed start or readiness check does not open the
+console; an attach failure after successful start leaves the server running.
+
 ```bash
 nesk status --dir ./instance
 nesk logs --dir ./instance
@@ -69,6 +83,22 @@ The bottom bar keeps the console controls visible:
 
 Console history and live output retained by the TUI are bounded to 1 MiB. The
 TUI requires a real terminal and rejects JSON and non-interactive operation.
+The same controls apply to `start --attach` and `attach`.
+
+The log pane preserves server SGR colors, including timestamps and severity
+labels, across history and live chunks. It supports 16-color, 256-color, and
+truecolor output with terminal-appropriate degradation, plus bold, italic,
+underline, and resets. Dim and unsupported attributes degrade safely.
+`NO_COLOR` shows readable text without colors or visible escape codes.
+Unicode (including split UTF-8 characters), CRLF, and standalone CR are handled
+incrementally; CR becomes a line break rather than overwriting earlier output.
+
+Only SGR styling is interpreted. Titles, clipboard access, hyperlinks, cursor
+movement, screen clearing, and terminal modes from server output are discarded.
+Control-sequence parsing retains at most 128 parameter characters. History
+also caps retained display lines at 10,000 and styled fragments at 32,768;
+oldest content is evicted when any limit is reached. Clearing the local view
+preserves the incoming stream's color and partial-sequence state.
 
 Readiness log checks save their latest captured output under the instance's
 `.luminesk_cli/` diagnostic state, which helps explain a timeout even after the

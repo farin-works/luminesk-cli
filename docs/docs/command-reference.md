@@ -355,12 +355,29 @@ omitted, Luminesk searches the current directory and its parents for
 
 ```text
 nesk start [--dir DIR] [--set KEY=VALUE]...
-  [--set-file KEY=PATH]... [--no-wait] [--json] [--non-interactive]
+  [--set-file KEY=PATH]... [--no-wait] [--attach] [--json] [--non-interactive]
 ```
 
 Creates the instance container from the locked image and normally waits for
 readiness. Input overrides affect this start only; `--no-wait` skips readiness
 and is intended for diagnosis.
+
+`--attach` opens the full-screen console after a successful start and readiness.
+For an already running server, it attaches to the existing container without
+restarting it. `--no-wait --attach` skips readiness and opens the console after
+Docker starts. Input overrides apply only when creating a container.
+
+```bash
+nesk start --dir ./servers/lumi --attach
+# From inside an instance:
+nesk start --attach
+```
+
+This requires interactive stdin and stdout and rejects `--json` and
+`--non-interactive` before starting Docker. Start/readiness failures do not open
+the TUI; readiness failure retains the usual cleanup. An attach failure after
+successful start leaves the server running. Console hotkeys are identical to
+[`nesk attach`](#nesk-attach).
 
 ### `nesk stop`
 
@@ -415,12 +432,18 @@ local view, and scrolling keys. It requires a real terminal and rejects
 `--json` and `--non-interactive`.
 
 The dark header keeps connection status separate from the instance name. Logs
-use neutral text with warning/error level labels highlighted, the command line
+preserve server ANSI SGR colors (16-color, 256-color, and truecolor), with
+terminal-appropriate color degradation. Bold, italic, underline, and resets are
+supported; dim and unsupported attributes degrade to normal text. Plain logs
+retain severity-label highlighting. The command line
 has a distinct background and an empty-input hint, and Stop/Kill
 shortcuts use warning/error colors. The footer wraps key-and-action pairs in
 narrow terminals. `NO_COLOR` keeps the layout and textual status without color;
-full-screen cursor control still requires a terminal. Terminal control codes in
-server output are neutralized rather than executed.
+full-screen cursor control still requires a terminal. Only SGR styles are
+interpreted: OSC titles, clipboard operations, hyperlinks, cursor movement,
+screen clearing, and other server control sequences are discarded. Colors stay
+inside the log pane. Unicode and split UTF-8/ANSI sequences are decoded
+incrementally; CRLF and standalone CR appear as line breaks.
 
 ## Diagnostics, cache, and instance discovery
 
