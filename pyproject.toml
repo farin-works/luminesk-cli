@@ -1,6 +1,6 @@
 [project]
 name = "luminesk-cli"
-version = "2.0.2"
+version = "2.1.0"
 description = "Docker-first Minecraft server recipe composer for Java and Bedrock."
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.13"

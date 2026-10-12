@@ -65,17 +65,17 @@ def test_release_matrix_matches_installer_assets() -> None:
 
 
 def test_wheel_verifier_parses_dependency_requirements(tmp_path: Path) -> None:
-    wheel = tmp_path / "luminesk_cli-2.0.2-py3-none-any.whl"
+    wheel = tmp_path / "luminesk_cli-2.1.0-py3-none-any.whl"
     metadata = """\
 Metadata-Version: 2.4
 Name: luminesk-cli
-Version: 2.0.2
+Version: 2.1.0
 Requires-Dist: rich>=15.0.0
 Requires-Dist: platformdirs[tests] >= 4.10.0; python_version >= "3.13"
 """
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("luminesk_cli/__init__.py", "")
-        archive.writestr("luminesk_cli-2.0.2.dist-info/METADATA", metadata)
+        archive.writestr("luminesk_cli-2.1.0.dist-info/METADATA", metadata)
     command = [
         sys.executable,
         str(REPOSITORY_ROOT / "scripts/verify_wheel.py"),
@@ -88,7 +88,7 @@ Requires-Dist: platformdirs[tests] >= 4.10.0; python_version >= "3.13"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("luminesk_cli/__init__.py", "")
         archive.writestr(
-            "luminesk_cli-2.0.2.dist-info/METADATA",
+            "luminesk_cli-2.1.0.dist-info/METADATA",
             metadata + "Requires-Dist: cyclopts>=3.0\n",
         )
     rejected = subprocess.run(command, check=False, capture_output=True, text=True)

@@ -8,7 +8,7 @@ on:
       release_tag:
         description: Version to validate and build without publishing
         required: true
-        default: v2.0.2
+        default: v2.1.0
         type: string
 
 permissions:
@@ -267,7 +267,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Check out release notes
+      - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -291,6 +291,5 @@ jobs:
             release-assets/* \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
-            --notes-file RELEASE_NOTES.md \
             --generate-notes \
             "${PRERELEASE[@]}"
