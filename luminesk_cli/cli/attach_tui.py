@@ -13,13 +13,16 @@ from typing import Protocol
 from prompt_toolkit import Application
 from prompt_toolkit.application import get_app
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import UIContent, UIControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.processors import AfterInput, ConditionalProcessor
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
@@ -31,9 +34,10 @@ from luminesk_cli.application.runtime import (
     AttachSession,
     DockerRuntime,
 )
+from luminesk_cli.cli.console_logs import ConsoleLogBuffer
 from luminesk_cli.cli.output import sanitize
+from luminesk_cli.cli.theme import color_disabled, prompt_styles, supports_unicode
 from luminesk_cli.cli.theme import prompt_color_depth as _color_depth
-from luminesk_cli.cli.theme import prompt_styles, supports_unicode
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 
 MAX_CONSOLE_COMMAND_BYTES = 64 * 1024
@@ -103,6 +107,14 @@ class AttachProcess(Protocol):
 ProcessFactory = Callable[[tuple[str, ...]], Awaitable[AttachProcess]]
 
 
+class _LogControl(UIControl):
+    def __init__(self, content: Callable[[], UIContent]) -> None:
+        self._content = content
+
+    def create_content(self, width: int, height: int) -> UIContent:
+        return self._content()
+
+
 class AttachTui:
     """Prompt-toolkit application that owns console rendering and key handling."""
 
@@ -124,17 +136,20 @@ class AttachTui:
         self._closing = False
         self._disconnected = False
         self._status = "Connecting"
-        self._log_text = _clean_console_text(session.history)
+        self._stream_error = False
+        self._log_buffer = ConsoleLogBuffer(
+            MAX_ATTACH_HISTORY_BYTES, color=not color_disabled()
+        )
+        self._log_buffer.feed(session.history)
+        self._log_cursor = self._log_buffer.last_line
         self._follow_output = True
 
-        self._logs = TextArea(
-            text=self._log_text,
-            read_only=True,
-            focusable=False,
-            scrollbar=True,
+        self._logs = Window(
+            content=_LogControl(self._log_content),
+            right_margins=[ScrollbarMargin(display_arrows=True)],
             wrap_lines=True,
             style="class:console",
-            lexer=ConsoleLexer(),
+            always_hide_cursor=True,
         )
         self._command = TextArea(
             height=1,
@@ -155,6 +170,7 @@ class AttachTui:
             layout=Layout(self._layout(), focused_element=self._command),
             key_bindings=self._bindings,
             full_screen=True,
+            min_redraw_interval=1 / 30,
             mouse_support=False,
             style=_style(),
             color_depth=_color_depth(),
@@ -292,44 +308,40 @@ class AttachTui:
 
         @bindings.add("c-l", eager=True)
         def clear_console(event: KeyPressEvent) -> None:
-            self._log_text = ""
-            self._set_log_document(follow=True)
+            self._log_buffer.clear()
+            self._follow_output = True
+            self._logs.vertical_scroll = 0
             event.app.invalidate()
 
         @bindings.add("pageup", eager=True)
         def page_up(event: KeyPressEvent) -> None:
-            render_info = self._logs.window.render_info
+            render_info = self._logs.render_info
             if render_info is None:
                 return
             line = max(0, render_info.first_visible_line() - render_info.window_height)
-            self._logs.buffer.cursor_position = (
-                self._logs.buffer.document.translate_row_col_to_index(line, 0)
-            )
-            self._logs.window.vertical_scroll = line
+            self._log_cursor = self._log_buffer.first_line + line
+            self._logs.vertical_scroll = line
             self._follow_output = False
             event.app.invalidate()
 
         @bindings.add("pagedown", eager=True)
         def page_down(event: KeyPressEvent) -> None:
-            render_info = self._logs.window.render_info
+            render_info = self._logs.render_info
             if render_info is None:
                 return
-            last_line = self._logs.buffer.document.line_count - 1
+            last_line = self._log_buffer.line_count - 1
             line = min(
                 last_line,
                 render_info.last_visible_line() + render_info.window_height,
             )
-            self._logs.buffer.cursor_position = (
-                self._logs.buffer.document.translate_row_col_to_index(line, 0)
-            )
-            self._logs.window.vertical_scroll = line
+            self._log_cursor = self._log_buffer.first_line + line
+            self._logs.vertical_scroll = line
             self._follow_output = line == last_line
             event.app.invalidate()
 
         @bindings.add("end", eager=True)
         def follow_output(event: KeyPressEvent) -> None:
             self._follow_output = True
-            self._logs.buffer.cursor_position = len(self._log_text)
             event.app.invalidate()
 
         return bindings
@@ -405,8 +417,16 @@ class AttachTui:
         if process is None or process.stdout is None:
             return
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        while chunk := await process.stdout.read(16 * 1024):
-            self._append_log(decoder.decode(chunk))
+        try:
+            while chunk := await process.stdout.read(16 * 1024):
+                self._append_log(decoder.decode(chunk))
+                # A continuously readable pipe must still let key handling run.
+                await asyncio.sleep(0)
+        except OSError as exc:
+            self._stream_error = True
+            self._disconnected = True
+            self._status = f"Docker attach stream failed: {exc} | press Ctrl+D to exit"
+            self._application.invalidate()
         remainder = decoder.decode(b"", final=True)
         if remainder:
             self._append_log(remainder)
@@ -416,7 +436,7 @@ class AttachTui:
         if process is None:
             return
         returncode = await process.wait()
-        if self._closing:
+        if self._closing or self._stream_error:
             return
         self._disconnected = True
         self._status = (
@@ -429,24 +449,39 @@ class AttachTui:
     def _append_log(self, content: str) -> None:
         if not content:
             return
-        self._log_text = _bounded_console_text(
-            self._log_text + _clean_console_text(content)
+        first_line = self._log_buffer.first_line
+        self._log_buffer.feed(content)
+        self._logs.vertical_scroll = max(
+            0, self._logs.vertical_scroll - (self._log_buffer.first_line - first_line)
         )
-        self._set_log_document(follow=self._follow_output)
         self._application.invalidate()
 
-    def _set_log_document(self, *, follow: bool) -> None:
-        cursor_position = (
-            len(self._log_text)
-            if follow
-            else min(self._logs.buffer.cursor_position, len(self._log_text))
-        )
-        self._logs.buffer.set_document(
-            Document(self._log_text, cursor_position=cursor_position),
-            bypass_readonly=True,
+    def _log_content(self) -> UIContent:
+        logs = self._log_buffer
+        if self._follow_output:
+            self._log_cursor = logs.last_line
+        self._log_cursor = min(logs.last_line, max(logs.first_line, self._log_cursor))
+        row = self._log_cursor - logs.first_line
+
+        def get_line(index: int) -> StyleAndTextTuples:
+            fragments = logs.line(index)
+            if fragments and logs.color and not logs.line_has_sgr(index):
+                text = "".join(fragment[1] for fragment in fragments)
+                return ConsoleLexer().lex_document(Document(text))(0)
+            return fragments
+
+        return UIContent(
+            get_line=get_line,
+            line_count=logs.line_count,
+            cursor_position=Point(
+                x=logs.line_length(row) if self._follow_output else 0, y=row
+            ),
+            show_cursor=False,
         )
 
     def _process_exit_code(self) -> int:
+        if self._stream_error:
+            return 1
         process = self._process
         return process.returncode if process is not None and process.returncode else 0
 
@@ -483,17 +518,6 @@ async def _open_attach_process(argv: tuple[str, ...]) -> AttachProcess:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-
-
-def _clean_console_text(content: str) -> str:
-    return sanitize(content.replace("\r\n", "\n").replace("\r", "\n"))
-
-
-def _bounded_console_text(content: str) -> str:
-    encoded = content.encode("utf-8", errors="replace")
-    if len(encoded) <= MAX_ATTACH_HISTORY_BYTES:
-        return content
-    return encoded[-MAX_ATTACH_HISTORY_BYTES:].decode("utf-8", errors="replace")
 
 
 def _dynamic_control(

@@ -15,8 +15,13 @@ from luminesk_cli.application.runtime import AttachSession, DockerRuntime
 from luminesk_cli.cli.attach_tui import (
     AttachTui,
     ConsoleLexer,
-    _clean_console_text,
     run_attach_tui,
+)
+from luminesk_cli.cli.console_logs import (
+    MAX_LOG_FRAGMENTS,
+    MAX_LOG_LINES,
+    MAX_SEQUENCE_CHARS,
+    ConsoleLogBuffer,
 )
 from luminesk_cli.domain.errors import RuntimeOperationError, ValidationError
 
@@ -48,7 +53,12 @@ def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
     )
 
     async def scenario() -> list[str]:
-        process = FakeProcess([b"Readable log [red]literal[/red]\n\x1b]0;unsafe\x07\n"])
+        process = FakeProcess(
+            [
+                b"\x1b[36mReadable log\x1b[m [red]literal[/red]\n"
+                b"\x1b[38;2;12;34;56mTruecolor\x1b[m\n\x1b]0;unsafe\x07\n"
+            ]
+        )
 
         async def factory(argv: tuple[str, ...]) -> FakeProcess:
             return process
@@ -83,6 +93,9 @@ def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
     assert "Luminesk" in text
     assert "Connected" in text
     assert "Readable log" in text
+    assert "�" not in text
+    assert "[36m" not in text
+    assert "unsafe" not in text
     assert "Type a server command" in text
     for key in ("^D", "^C", "^K", "^L", "PgUp/PgDn", "End"):
         assert key in text
@@ -92,6 +105,7 @@ def test_attach_layout_keeps_logs_status_and_all_hotkeys_visible(
         assert "48;" not in stream.getvalue()
     elif depth == ColorDepth.DEPTH_24_BIT:
         assert "38;2;255;" in stream.getvalue()
+        assert "38;2;12;34;56" in stream.getvalue()
     else:
         assert "38;2;" not in stream.getvalue()
         assert "48;2;" not in stream.getvalue()
@@ -316,13 +330,296 @@ def test_log_body_does_not_create_false_error_highlights(line: str) -> None:
     )
 
 
-def test_log_lexer_preserves_sanitized_ansi_and_line_breaks() -> None:
-    cleaned = _clean_console_text("[ERROR] \x1b[31muntrusted\r\nnext\rline\x9b2J")
-    document = Document(cleaned)
-    render_line = ConsoleLexer().lex_document(document)
-    rendered = "\n".join(
-        "".join(fragment[1] for fragment in render_line(index))
-        for index in range(document.line_count)
+def _log_text(logs: ConsoleLogBuffer) -> str:
+    return "\n".join(
+        "".join(fragment[1] for fragment in logs.line(index))
+        for index in range(logs.line_count)
     )
-    assert rendered == "[ERROR] �[31muntrusted\nnext\nline�2J"
-    assert render_line(document.line_count) == []
+
+
+def test_log_sgr_preserves_server_colors_and_resets() -> None:
+    logs = ConsoleLogBuffer(1024)
+    logs.feed("\x1b[36m14:33:54\x1b[m [\x1b[32mINFO\x1b[0m] ")
+    logs.feed("\x1b[33mWARN\x1b[31mERROR\x1b[39m normal")
+    assert logs.line(0) == [
+        ("fg:ansicyan", "14:33:54"),
+        ("", " ["),
+        ("fg:ansigreen", "INFO"),
+        ("", "] "),
+        ("fg:ansiyellow", "WARN"),
+        ("fg:ansired", "ERROR"),
+        ("", " normal"),
+    ]
+    assert logs.line(1) == []
+
+
+@pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("index", range(16))
+def test_log_standard_and_bright_colors(index: int, background: bool) -> None:
+    colors = (
+        "ansiblack ansired ansigreen ansiyellow ansiblue ansimagenta ansicyan "
+        "ansigray ansibrightblack ansibrightred ansibrightgreen ansibrightyellow "
+        "ansibrightblue ansibrightmagenta ansibrightcyan ansiwhite"
+    ).split()
+    code = (30 if index < 8 else 90) + index % 8 + (10 if background else 0)
+    logs = ConsoleLogBuffer(1024)
+    logs.feed(f"\x1b[{code}mcolor\x1b[{49 if background else 39}mreset")
+    assert logs.line(0) == [
+        (f"{'bg' if background else 'fg'}:{colors[index]}", "color"),
+        ("", "reset"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "sequence,style",
+    [
+        ("38;5;0", "fg:ansiblack"),
+        ("38;5;9", "fg:ansibrightred"),
+        ("38;5;16", "fg:#000000"),
+        ("38;5;196", "fg:#ff0000"),
+        ("48;5;231", "bg:#ffffff"),
+        ("48;5;232", "bg:#080808"),
+        ("38;5;255", "fg:#eeeeee"),
+        ("38;2;12;34;56", "fg:#0c2238"),
+        ("48;2;255;0;128", "bg:#ff0080"),
+        ("1;2;3;4", "bold italic underline"),
+        ("1;3;4;22;23;24", ""),
+        ("2;22", ""),
+        ("38;5;256", ""),
+        ("38;2;256;1;2", ""),
+        ("38;2;1", ""),
+        ("38;7;1", ""),
+        ("38", ""),
+        ("5;6;7;8;9", ""),
+    ],
+)
+def test_log_extended_colors_and_safe_attribute_degradation(
+    sequence: str, style: str
+) -> None:
+    logs = ConsoleLogBuffer(1024)
+    logs.feed(f"\x1b[{sequence}mvalue")
+    assert logs.line(0) == [(style, "value")]
+
+
+@pytest.mark.parametrize("split", range(1, 35))
+def test_log_chunk_boundaries_preserve_ansi_unicode_and_crlf(split: int) -> None:
+    content = "\x1b[38;2;10;20;30mПривет🙂\r\nмир\rnext\x1b[m!"
+    logs = ConsoleLogBuffer(1024)
+    logs.feed(content[:split])
+    logs.feed(content[split:])
+    assert _log_text(logs) == "Привет🙂\nмир\nnext!"
+    assert logs.line(0) == [("fg:#0a141e", "Привет🙂")]
+    assert logs.line(1) == [("fg:#0a141e", "мир")]
+    assert logs.line(2) == [("fg:#0a141e", "next"), ("", "!")]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "\x1b]52;c;clipboard\x07",
+        "\x1b]0;title\x1b\\",
+        "\x1b]8;;https://evil.invalid\x1b\\",
+        "\x1b[2J",
+        "\x1b[999C",
+        "\x1b[?1049h",
+        "\x1b[8;999;999t",
+        "\x1b[31:1m",
+        "\x1b[1\x00m",
+        "\x1b(0",
+        "\x1b7",
+        "\x1bPpayload\x1b\\",
+        "\x1b_payload\x1b\\",
+        "\x1b^payload\x1b\\",
+        "\x1bXpayload\x1b\\",
+        "\x9d52;c;clipboard\x9c",
+        "\x90payload\x9c",
+        "\x9b2J",
+        "\x00\x01\x02\x07\x08\x7f\x85",
+        "\x1b[" + "9" * 10000 + "m",
+        "\x1b]52;c;" + "x" * 10000 + "\x07",
+    ],
+)
+def test_log_control_injections_are_discarded_across_chunks(sequence: str) -> None:
+    logs = ConsoleLogBuffer(1024)
+    logs.feed("before")
+    for char in sequence:
+        logs.feed(char)
+    logs.feed("after")
+    assert _log_text(logs) == "beforeafter"
+    assert all(not fragment[0] for fragment in logs.line(0))
+
+
+def test_log_unfinished_sequences_and_clear_stay_bounded() -> None:
+    logs = ConsoleLogBuffer(1024)
+    logs.feed("\x1b[31mred\x1b]52;c;")
+    logs.clear()
+    for _ in range(100):
+        logs.feed("x" * 10000)
+    assert logs.byte_count == 0
+    logs.feed("\x07still red\x1b[")
+    logs.clear()
+    logs.feed("32mgreen")
+    assert logs.line(0) == [("fg:ansigreen", "green")]
+    logs.feed("\x1b[" + "9" * (MAX_SEQUENCE_CHARS + 1))
+    assert len(logs._parser._sequence) <= MAX_SEQUENCE_CHARS
+    logs.feed("mreadable")
+    assert _log_text(logs) == "greenreadable"
+
+
+def test_log_storage_bounds_bytes_lines_fragments_and_unicode() -> None:
+    logs = ConsoleLogBuffer(64)
+    logs.feed("🙂" * 100)
+    assert _log_text(logs) == "🙂" * 16
+    logs.feed("\x1b[31m" + "я" * 100)
+    assert logs.byte_count <= 64
+    assert "�" not in _log_text(logs)
+    assert logs.line(0)[-1][0] == "fg:ansired"
+
+    logs = ConsoleLogBuffer(1024 * 1024)
+    logs.feed("line\n" * (MAX_LOG_LINES + 100))
+    assert logs.line_count == MAX_LOG_LINES
+    logs.clear()
+    logs.feed("\x1b[31mx\x1b[32my" * MAX_LOG_FRAGMENTS)
+    assert logs.fragment_count <= MAX_LOG_FRAGMENTS
+    assert logs.byte_count <= 1024 * 1024
+
+
+def test_log_completed_lines_are_reused_during_streaming() -> None:
+    logs = ConsoleLogBuffer(1024 * 1024)
+    logs.feed("\x1b[32mhistory\n")
+    history = logs.line(0)
+    for _ in range(1000):
+        logs.feed("x")
+    assert logs.line(0) is history
+    assert logs.fragment_count == 2
+
+
+@pytest.mark.parametrize("no_color", [False, True])
+def test_tui_decodes_split_utf8_and_history_ansi_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_color: bool
+) -> None:
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "")
+
+    async def scenario() -> None:
+        content = "mПривет🙂\r\n\x1b[0mnormal".encode()
+        process = FakeProcess([bytes([byte]) for byte in content])
+
+        async def factory(argv: tuple[str, ...]) -> FakeProcess:
+            return process
+
+        with create_pipe_input() as pipe_input:
+            tui = AttachTui(
+                tmp_path,
+                DockerRuntime(),
+                AttachSession(argv=_session().argv, tag="fixture", history="\x1b[36"),
+                process_factory=factory,
+                input=pipe_input,
+                output=DummyOutput(),
+            )
+            tui._process = process
+            await tui._read_console()
+            assert _log_text(tui._log_buffer) == "Привет🙂\nnormal"
+            assert tui._log_content().get_line(0) == [
+                ("" if no_color else "fg:ansicyan", "Привет🙂")
+            ]
+            assert tui._log_content().get_line(1) == [("", "normal")]
+            assert tui._header()[0][0] == "class:title"
+            assert tui._command.buffer.text == ""
+
+    asyncio.run(scenario())
+
+
+def test_tui_scroll_follow_clear_and_resize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    async def scenario() -> None:
+        process = FakeProcess()
+        size = Size(rows=24, columns=80)
+        output = Vt100_Output(StringIO(), lambda: size, enable_cpr=False)
+
+        async def factory(argv: tuple[str, ...]) -> FakeProcess:
+            return process
+
+        with create_pipe_input() as pipe_input:
+            tui = AttachTui(
+                tmp_path,
+                DockerRuntime(),
+                _session(),
+                process_factory=factory,
+                input=pipe_input,
+                output=output,
+            )
+            tui._append_log("\x1b[32m" + "".join(f"line {i}\n" for i in range(200)))
+            task = asyncio.create_task(tui.run())
+            await asyncio.sleep(0.1)
+            assert (
+                tui._log_content().cursor_position.y == tui._log_buffer.line_count - 1
+            )
+            pipe_input.send_bytes(b"\x1b[5~")
+            await asyncio.sleep(0.1)
+            assert not tui._follow_output
+            anchor = tui._log_cursor
+            tui._append_log("new live output\n")
+            assert (
+                tui._log_content().cursor_position.y
+                == anchor - tui._log_buffer.first_line
+            )
+            pipe_input.send_bytes(b"\x1b[6~")
+            await asyncio.sleep(0.1)
+            assert tui._log_cursor > anchor
+            pipe_input.send_bytes(b"\x1b[F")
+            await asyncio.sleep(0.1)
+            assert tui._follow_output
+            size = Size(rows=18, columns=32)
+            tui._application.invalidate()
+            await asyncio.sleep(0.1)
+            assert tui._logs.render_info is not None
+            assert tui._logs.render_info.window_width < 32
+            pipe_input.send_bytes(b"\x0c")
+            await asyncio.sleep(0.1)
+            assert _log_text(tui._log_buffer) == ""
+            assert tui._follow_output
+            tui._append_log("after clear")
+            assert tui._log_content().get_line(0) == [("fg:ansigreen", "after clear")]
+            pipe_input.send_bytes(b"\x04")
+            assert await asyncio.wait_for(task, 2) == 0
+
+    asyncio.run(scenario())
+
+
+def test_tui_stream_error_reports_failure_and_allows_exit(tmp_path: Path) -> None:
+    class BrokenOutput(FakeProcessOutput):
+        async def read(self, size: int = -1) -> bytes:
+            raise ConnectionResetError("connection lost")
+
+    async def scenario() -> None:
+        process = FakeProcess()
+        process.stdout = BrokenOutput()
+
+        async def factory(argv: tuple[str, ...]) -> FakeProcess:
+            return process
+
+        with create_pipe_input() as pipe_input:
+            tui = AttachTui(
+                tmp_path,
+                DockerRuntime(),
+                _session(),
+                process_factory=factory,
+                input=pipe_input,
+                output=DummyOutput(),
+            )
+            task = asyncio.create_task(tui.run())
+            await asyncio.sleep(0.1)
+            assert "connection lost" in tui._status_line()[0][1]
+            pipe_input.send_bytes(b"\x04")
+            with pytest.raises(RuntimeOperationError, match="Docker attach failed"):
+                await asyncio.wait_for(task, 2)
+            assert process.returncode == 0
+
+    asyncio.run(scenario())
