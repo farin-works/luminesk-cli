@@ -338,6 +338,10 @@ def windows_install(
         )
     prelude = r"""
 $TestHome = $env:LUMINESK_TEST_HOME
+# Windows can rewrite architecture variables when launching PowerShell on ARM64.
+# Set the fixture architecture inside the child process, before installer code.
+$env:PROCESSOR_ARCHITECTURE = 'AMD64'
+$env:PROCESSOR_ARCHITEW6432 = 'AMD64'
 function Receive-VerifiedHost($Url, $Destination, $Limit) {
     if ($env:LUMINESK_TEST_SCENARIO -eq 'network') { throw 'simulated network failure' }
     $name = if ($Url.EndsWith('/latest')) { 'release.json' } else { 'bundle.zip' }
@@ -356,8 +360,6 @@ function Receive-VerifiedHost($Url, $Destination, $Limit) {
         LUMINESK_TEST_HOME=str(home),
         LUMINESK_TEST_DATA=str(directory),
         LUMINESK_TEST_SCENARIO=scenario,
-        PROCESSOR_ARCHITECTURE="AMD64",
-        PROCESSOR_ARCHITEW6432="AMD64",
     )
     environment["PATH"] = (
         str(home / ".local/bin")
