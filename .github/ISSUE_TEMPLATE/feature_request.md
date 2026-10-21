@@ -3,7 +3,7 @@ name: Feature request
 about: Suggest an idea or enhancement for this project
 title: "[Feature] ..."
 labels: enhancement
-assignees: Taskov1ch
+assignees: Arkfarin
 type: Feature
 
 ---

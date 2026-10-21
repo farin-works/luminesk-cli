@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -166,3 +167,22 @@ def test_recipe_lock_rejects_absolute_local_origin() -> None:
             version="1.0.0",
             manifest_digest=f"sha256:{'e' * 64}",
         )
+
+
+@pytest.mark.parametrize("owner", ["farin-works", "task-v1"])
+def test_database_lock_preserves_official_origin_after_rename(owner: str) -> None:
+    recipe = RecipeLock(
+        kind="database",
+        source=f"github:{owner}/luminesk-database",
+        revision="d" * 40,
+        entry="paper",
+        path="database/paper",
+        tracking=True,
+        version="1.0.1",
+        manifest_digest=f"sha256:{'e' * 64}",
+    )
+    original = replace(make_lockfile(), recipe=recipe)
+
+    assert parse_lockfile(original.to_bytes()).to_bytes() == original.to_bytes()
+    with pytest.raises(ValidationError, match="not official"):
+        replace(recipe, source="github:untrusted/luminesk-database")

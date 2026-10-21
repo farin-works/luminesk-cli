@@ -17,7 +17,7 @@ from luminesk_cli.infrastructure.sources.common import (
 )
 
 API_ROOT = "https://fill.papermc.io/v3/projects/paper"
-HEADERS = {"User-Agent": "luminesk/2.0 (https://github.com/task-v1/luminesk-cli)"}
+HEADERS = {"User-Agent": "luminesk/2.0 (https://github.com/farin-works/luminesk-cli)"}
 
 
 class PaperResolver:

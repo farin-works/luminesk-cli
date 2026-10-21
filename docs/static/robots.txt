@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://luminesk.taskov1ch.xyz/sitemap.xml
+Sitemap: https://nesk.farin.cc/sitemap.xml

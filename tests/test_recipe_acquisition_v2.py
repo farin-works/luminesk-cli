@@ -274,7 +274,7 @@ def test_database_identity_installs_from_active_snapshot(
         recipe_root,
         manifest,
         kind="database",
-        source="github:task-v1/luminesk-database",
+        source="github:farin-works/luminesk-database",
         revision=REVISION,
         tracking=True,
         entry="fixture",

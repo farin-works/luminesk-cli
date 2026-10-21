@@ -6,7 +6,8 @@ readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-authors = [{ name = "Taskov1ch", email = "sudo.taskov1ch@gmail.com" }]
+authors = [{ name = "Arkfarin", email = "com.arkfarin@gmail.com" }]
+maintainers = [{ name = "Farin Works" }]
 keywords = [
   "cli",
   "docker",
@@ -38,9 +39,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://luminesk.taskov1ch.xyz"
-Issues = "https://github.com/task-v1/luminesk-cli/issues"
-Repository = "https://github.com/task-v1/luminesk-cli.git"
+Homepage = "https://nesk.farin.cc"
+Issues = "https://github.com/farin-works/luminesk-cli/issues"
+Repository = "https://github.com/farin-works/luminesk-cli.git"
 
 [project.scripts]
 nesk = "luminesk_cli.main:main"

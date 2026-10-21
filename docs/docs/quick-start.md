@@ -13,13 +13,13 @@ recipe name in the same workflow.
 Linux or macOS:
 
 ```bash
-curl -fsSL https://luminesk.taskov1ch.xyz/sh | sh -s -- --yes
+curl -fsSL https://nesk.farin.cc/sh | sh -s -- --yes
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://luminesk.taskov1ch.xyz/ps1 | iex
+irm https://nesk.farin.cc/ps1 | iex
 ```
 
 The self-contained installer does not require Python. The Unix `--yes` belongs

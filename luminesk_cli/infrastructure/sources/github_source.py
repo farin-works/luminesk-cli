@@ -22,7 +22,7 @@ class GitHubSourceResolver:
         owner, repository = source.options.repository.split("/", 1)
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "luminesk/2.0 (https://github.com/task-v1/luminesk-cli)",
+            "User-Agent": "luminesk/2.0 (https://github.com/farin-works/luminesk-cli)",
             "X-GitHub-Api-Version": "2022-11-28",
         }
         token = os.environ.get("GITHUB_TOKEN")

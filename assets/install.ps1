@@ -48,7 +48,7 @@ function Get-Sha([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algor
 function Receive-VerifiedHost([string]$Url, [string]$Destination, [long]$Limit) {
     # Explicit redirects, bounded streaming, and no ambient credentials.
     for ($redirect = 0; $redirect -le 5; $redirect++) {
-        if ($Url -notmatch '^https://(?:api\.github\.com/repos/task-v1/luminesk-cli/releases/latest|github\.com/task-v1/luminesk-cli/releases/download/[^?#]+|release-assets\.githubusercontent\.com/[^\r\n]*)$') { throw 'Release asset has an invalid download URL' }
+        if ($Url -notmatch '^https://(?:api\.github\.com/repos/farin-works/luminesk-cli/releases/latest|github\.com/farin-works/luminesk-cli/releases/download/[^?#]+|release-assets\.githubusercontent\.com/[^\r\n]*)$') { throw 'Release asset has an invalid download URL' }
         $request = [Net.HttpWebRequest]::Create($Url)
         $request.AllowAutoRedirect = $false
         $request.UserAgent = 'Luminesk-Installer'
@@ -216,14 +216,14 @@ try {
     $work = Join-Path $root ('.stage.' + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($work) | Out-Null
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Receive-VerifiedHost 'https://api.github.com/repos/task-v1/luminesk-cli/releases/latest' "$work\release.json" 4194304
+    Receive-VerifiedHost 'https://api.github.com/repos/farin-works/luminesk-cli/releases/latest' "$work\release.json" 4194304
     $release = Get-Content -Raw -LiteralPath "$work\release.json" | ConvertFrom-Json
     if ($release.tag_name -notmatch '^v?(\d+\.\d+\.\d+(?:(?:a|b|rc)[1-9][0-9]*)?)$') { throw 'Invalid release version' }
     $version = $Matches[1]; $assetName = "luminesk-windows-$arch.zip"
     $assets = @($release.assets | Where-Object { $_.name -eq $assetName })
     if ($assets.Count -ne 1) { throw 'Release must contain exactly one matching onedir ZIP' }
     $targetAsset = $assets[0]
-    $expectedUrl = "https://github.com/task-v1/luminesk-cli/releases/download/$($release.tag_name)/$assetName"
+    $expectedUrl = "https://github.com/farin-works/luminesk-cli/releases/download/$($release.tag_name)/$assetName"
     if ($targetAsset.browser_download_url -cne $expectedUrl) { throw 'Release asset has an invalid download URL' }
     if ($targetAsset.digest -cnotmatch '^sha256:([0-9a-f]{64})$') { throw 'Release asset has no valid SHA-256 digest' }
     $expectedSha = $Matches[1]

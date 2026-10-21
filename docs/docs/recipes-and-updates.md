@@ -16,7 +16,7 @@ trust.
 ## The official catalog
 
 The catalog is a locally cached, verified snapshot of
-`task-v1/luminesk-database`. Start with:
+`farin-works/luminesk-database`. Start with:
 
 ```bash
 nesk catalog update
@@ -25,6 +25,11 @@ nesk search --type core
 nesk search lumi --edition bedrock
 nesk info RECIPE
 ```
+
+Existing 2.x lockfiles and cached snapshots with the
+`github:task-v1/luminesk-database` identity remain readable;
+their pinned revisions and hashes are preserved. Do not edit instance state or
+lockfiles to replace the old name. Run `nesk catalog update` to refresh discovery.
 
 `catalog update` resolves the official repository's default branch to a commit,
 downloads a bounded index and its SHA-256, validates its strict schema, and

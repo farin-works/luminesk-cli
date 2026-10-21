@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from luminesk_cli.domain.catalog import DATABASE_REPOSITORY_ALIASES
 from luminesk_cli.domain.errors import ValidationError
 from luminesk_cli.domain.primitives import (
     SEMVER_RE,
@@ -56,7 +57,7 @@ class RecipeLock:
             validate_digest(self.template_digest, "lockfile.recipe.templateDigest")
 
         if self.kind == "database":
-            if self.source != "github:task-v1/luminesk-database":
+            if self.source not in DATABASE_REPOSITORY_ALIASES:
                 raise ValidationError("database recipe source is not official")
             if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
                 raise ValidationError("database recipe revision must be a Git commit")

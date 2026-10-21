@@ -8,7 +8,7 @@ const build =
   process.env.DOCS_BUILD_DIR ??
   fileURLToPath(new URL("../build/", import.meta.url));
 const html = await readFile(join(build, "index.html"), "utf8");
-const origin = "https://luminesk.taskov1ch.xyz";
+const origin = "https://nesk.farin.cc";
 const tags = (name) =>
   [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, "g"))].map(([tag]) => tag);
 const attribute = (tag, name) =>
@@ -154,9 +154,9 @@ test("shows copyright and the project license in homepage and documentation foot
     const footer = page.match(/<footer\b[^>]*>(.*?)<\/footer>/s)?.[1];
     assert.ok(footer, "footer is exported without JavaScript");
     const text = footer.replace(/<[^>]*>/g, "");
-    assert.match(text, /© \d{4} Taskov1ch\. All rights reserved\./);
+    assert.match(text, /© \d{4} Farin Works\. All rights reserved\./);
     assert.match(text, /GNU GPLv3 or later/);
-    assert.ok(footer.includes('href="https://github.com/task-v1/luminesk-cli/blob/main/LICENSE"'));
+    assert.ok(footer.includes('href="https://github.com/farin-works/luminesk-cli/blob/main/LICENSE"'));
     assert.doesNotMatch(text, /Reproducible from the first block|Built with Docusaurus/);
   }
 });

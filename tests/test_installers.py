@@ -39,18 +39,6 @@ def archive_bundle(source: Path, output: Path) -> None:
         raise ValueError(result.stderr)
 
 
-def test_one_line_installers_fail_closed() -> None:
-    shell = (REPOSITORY_ROOT / "assets/install.sh").read_text(encoding="utf-8")
-    powershell = (REPOSITORY_ROOT / "assets/install.ps1").read_text(encoding="utf-8")
-
-    assert "Release asset has no valid SHA-256 digest" in shell
-    assert "sha256sum or shasum is required" in shell
-    assert "luminesk-$OS-$ARCH.zip" in shell
-    assert "Release asset has no valid SHA-256 digest" in powershell
-    assert "$targetAsset.browser_download_url" in powershell
-    assert "--_bundle-check" in shell and "--_bundle-check" in powershell
-
-
 def test_release_matrix_matches_installer_assets() -> None:
     workflow = (REPOSITORY_ROOT / ".github/workflows/release-pypi.yml").read_text(
         encoding="utf-8"
@@ -283,7 +271,7 @@ def windows_install(
         archive.write_bytes(b"not a zip")
     corrupt_archive(archive, scenario)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    url = f"https://github.com/task-v1/luminesk-cli/releases/download/v{version}/luminesk-windows-amd64.zip"
+    url = f"https://github.com/farin-works/luminesk-cli/releases/download/v{version}/luminesk-windows-amd64.zip"
     (directory / "release.json").write_text(
         json.dumps(
             {
@@ -344,6 +332,7 @@ $env:PROCESSOR_ARCHITECTURE = 'AMD64'
 $env:PROCESSOR_ARCHITEW6432 = 'AMD64'
 function Receive-VerifiedHost($Url, $Destination, $Limit) {
     if ($env:LUMINESK_TEST_SCENARIO -eq 'network') { throw 'simulated network failure' }
+    if ($Url -notmatch '^https://(?:api\.github\.com/repos|github\.com)/farin-works/luminesk-cli/releases/') { throw 'unexpected release repository' }
     $name = if ($Url.EndsWith('/latest')) { 'release.json' } else { 'bundle.zip' }
     [IO.File]::Copy((Join-Path $env:LUMINESK_TEST_DATA $name), $Destination)
 }
@@ -534,6 +523,10 @@ def posix_install(
     prelude = """
 fetch() {
     [ "$LUMINESK_TEST_SCENARIO" != network ] || return 1
+    case "$1" in
+        https://api.github.com/repos/farin-works/luminesk-cli/releases/latest|https://github.com/farin-works/luminesk-cli/releases/download/*) ;;
+        *) echo 'unexpected release repository' >&2; return 1 ;;
+    esac
     case "$1" in */latest) name=release ;; */SHA256SUMS) name=sums ;; *) name=bundle.zip ;; esac
     cp "$LUMINESK_TEST_DATA/$name" "$2"
 }

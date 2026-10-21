@@ -171,7 +171,7 @@ settings into an upstream default.
 
 The `maven` provider resolves `com.koshakmine:Lumi` from
 `https://repo.lumi.su/releases`, as in the
-[official Lumi recipe](https://github.com/task-v1/luminesk-database/blob/main/database/lumi/luminesk.toml).
+[official Lumi recipe](https://github.com/farin-works/luminesk-database/blob/main/database/lumi/luminesk.toml).
 `version = "latest"` with `channel = "stable"` selects the highest matching
 stable version at lock time. The lock records the exact version, URL, size,
 and SHA-256. When the repository supplies a SHA-256 sidecar, Luminesk verifies

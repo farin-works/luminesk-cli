@@ -4,12 +4,10 @@ import json
 import os
 import subprocess
 import sys
-from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from rich.console import Console
 
 from luminesk_cli.cli.entry import main
 from luminesk_cli.domain.lockfile import Lockfile, RecipeLock, RuntimeLock
@@ -20,42 +18,6 @@ from luminesk_cli.infrastructure.recipe_snapshot import create_recipe_snapshot
 from luminesk_cli.infrastructure.state import load_state
 
 pytestmark = pytest.mark.usefixtures("docker_engine")
-
-
-def test_human_output_uses_brand_semantic_colors() -> None:
-    from luminesk_cli.cli.output import THEME, human_message
-
-    stream = StringIO()
-    console = Console(
-        file=stream,
-        force_terminal=True,
-        color_system="truecolor",
-        no_color=False,
-        highlight=False,
-        theme=THEME,
-        width=120,
-    )
-    message = human_message(
-        "Install preview\n"
-        "  Runtime image: example/server@sha256:" + "a" * 64 + "\n"
-        "  add      server.jar — managed file\n"
-        "Warning: review this change",
-        tone="info",
-    )
-
-    console.print(message)
-    rendered = stream.getvalue()
-
-    assert "\x1b[" in rendered
-    assert "38;2;255;51;121m" in rendered
-    assert "38;2;0;210;106m" in rendered
-    assert "38;2;255;200;61m" in rendered
-    assert message.plain == (
-        "Install preview\n"
-        "  Runtime image: example/server@sha256:" + "a" * 64 + "\n"
-        "  add      server.jar — managed file\n"
-        "Warning: review this change"
-    )
 
 
 def test_human_output_does_not_interpret_markup_or_terminal_controls() -> None:

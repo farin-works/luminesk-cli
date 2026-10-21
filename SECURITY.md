@@ -9,7 +9,7 @@ releases are not supported.
 
 Please do not open a public issue for an undisclosed vulnerability. Report it
 through GitHub private vulnerability reporting for this repository. If that is
-not available, contact `sudo.taskov1ch@gmail.com` with the affected version,
+not available, contact `com.arkfarin@gmail.com` with the affected version,
 reproduction steps, and expected impact.
 
 ## Accepted documentation build risk

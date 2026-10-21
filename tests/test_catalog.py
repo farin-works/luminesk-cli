@@ -18,6 +18,7 @@ from luminesk_cli.domain.errors import SecurityError, ValidationError
 from luminesk_cli.domain.manifest import parse_manifest
 from luminesk_cli.domain.primitives import sha256_digest
 from luminesk_cli.infrastructure.catalog import CatalogClient, CatalogStore
+from luminesk_cli.infrastructure.state import canonical_json_bytes
 from luminesk_cli.infrastructure.template import read_template_tree
 
 REVISION = "a" * 40
@@ -126,6 +127,50 @@ def test_store_rejects_immutable_revision_collision(tmp_path: Path) -> None:
     assert store.load_active() == snapshot
 
 
+def test_store_reuses_pre_rename_snapshot_without_rewriting_it(tmp_path: Path) -> None:
+    store = CatalogStore(tmp_path / "catalog")
+    content = _index(_entry())
+    snapshot = parse_catalog_index(content)
+    store.commit(snapshot, content)
+    metadata_path = store.root / "snapshots" / REVISION / "snapshot.json"
+    old_metadata = canonical_json_bytes(
+        {
+            "repository": "github:task-v1/luminesk-database",
+            "revision": REVISION,
+            "indexDigest": snapshot.index_digest,
+        }
+    )
+    metadata_path.write_bytes(old_metadata)
+    store.active_path.write_bytes(old_metadata)
+
+    assert store.verify().repository == "github:farin-works/luminesk-database"
+    assert store.use(REVISION) == snapshot
+    store.commit(snapshot, content)
+    assert metadata_path.read_bytes() == old_metadata
+    assert store.verify() == snapshot
+    assert json.loads(store.active_path.read_bytes())["repository"] == (
+        "github:farin-works/luminesk-database"
+    )
+
+
+@pytest.mark.parametrize(
+    "target", ["active.json", f"snapshots/{REVISION}/snapshot.json"]
+)
+def test_store_rejects_unofficial_repository_after_rename(
+    tmp_path: Path, target: str
+) -> None:
+    store = CatalogStore(tmp_path / "catalog")
+    content = _index(_entry())
+    store.commit(parse_catalog_index(content), content)
+    path = store.root / target
+    metadata = json.loads(path.read_bytes())
+    metadata["repository"] = "github:untrusted/luminesk-database"
+    path.write_bytes(canonical_json_bytes(metadata))
+
+    with pytest.raises((ValidationError, SecurityError), match="not official"):
+        store.verify()
+
+
 def test_store_use_verifies_cached_snapshot_metadata(tmp_path: Path) -> None:
     store = CatalogStore(tmp_path / "catalog")
     content = _index(_entry())
@@ -165,6 +210,8 @@ def test_catalog_update_verifies_digest_and_is_atomic(tmp_path: Path) -> None:
     ).update()
     assert updated.revision == REVISION
     assert store.load_active() == updated
+    assert updated.repository == "github:farin-works/luminesk-database"
+    assert all("/farin-works/luminesk-database" in path for path in requested_paths)
     assert any(
         f"/{DISTRIBUTION_REVISION}/dist/index-v1.json" in path
         for path in requested_paths
@@ -442,5 +489,5 @@ command = ["./server"]
 
     assert manifest.inputs[0].name == "port"
     assert requests == [
-        f"/task-v1/luminesk-database/{REVISION}/database/lumi/luminesk.toml"
+        f"/farin-works/luminesk-database/{REVISION}/database/lumi/luminesk.toml"
     ]

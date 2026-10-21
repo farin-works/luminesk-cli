@@ -28,8 +28,8 @@ import BrandAtmosphere from './BrandAtmosphere';
 import useLandingMotion from './useLandingMotion';
 import styles from './Landing.module.css';
 
-const repository = 'https://github.com/task-v1/luminesk-cli';
-const catalog = 'https://github.com/task-v1/luminesk-database';
+const repository = 'https://github.com/farin-works/luminesk-cli';
+const catalog = 'https://github.com/farin-works/luminesk-database';
 const workflow = [
   {
     title: 'Recipe',
@@ -131,7 +131,7 @@ export default function Landing(): ReactNode {
             name: 'Luminesk-CLI',
             applicationCategory: 'DeveloperApplication',
             operatingSystem: 'Linux, macOS, Windows',
-            url: 'https://luminesk.taskov1ch.xyz/',
+            url: 'https://nesk.farin.cc/',
             description:
               'Reproducible Minecraft Java and Bedrock server recipe composer and lifecycle manager with Docker.',
             license: 'https://www.gnu.org/licenses/gpl-3.0.html',
@@ -503,7 +503,7 @@ export default function Landing(): ReactNode {
         </div>
         <div className={styles.footerLegal}>
           <small>
-            © {new Date().getFullYear()} Taskov1ch. All rights reserved.
+            © {new Date().getFullYear()} Farin Works. All rights reserved.
           </small>
           <small>
             Licensed under{' '}

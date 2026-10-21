@@ -1,6 +1,7 @@
 # Documentation website
 
-The homepage presents the 2.0 release. Its installation commands and latest-release
+The homepage presents Luminesk 2.x at `https://nesk.farin.cc`, maintained by
+Farin Works. Its installation commands and latest-release
 links follow the same release workflow as the installation guide. Documentation
 routes remain unchanged. The Docusaurus mobile sidebar is available only under
 `/docs`; other pages use direct homepage navigation.

@@ -1,20 +1,24 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/task-v1/luminesk-cli/raw/refs/heads/main/docs/static/img/logo-with-cli.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/task-v1/luminesk-cli/raw/refs/heads/main/docs/static/img/logo-with-cli-dark.svg">
-    <img src="https://github.com/task-v1/luminesk-cli/raw/refs/heads/main/docs/static/img/logo-with-cli-dark.svg" width="500" alt="Luminesk-CLI">
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/farin-works/luminesk-cli/raw/refs/heads/main/docs/static/img/logo-with-cli.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://github.com/farin-works/luminesk-cli/raw/refs/heads/main/docs/static/img/logo-with-cli-dark.svg">
+    <img src="https://github.com/farin-works/luminesk-cli/raw/refs/heads/main/docs/static/img/logo-with-cli-dark.svg" width="500" alt="Luminesk-CLI">
   </picture>
 
   <p><strong>A reproducible composer for Minecraft Java and Bedrock server instances</strong></p>
 
   <p>
-    <a href="https://github.com/task-v1/luminesk-cli/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/task-v1/luminesk-cli/ci.yml?branch=main&label=CI"></a>
-    <a href="https://github.com/task-v1/luminesk-cli/releases/latest"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/task-v1/luminesk-cli"></a>
+    <a href="https://github.com/farin-works/luminesk-cli/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/farin-works/luminesk-cli/ci.yml?branch=main&label=CI"></a>
+    <a href="https://github.com/farin-works/luminesk-cli/releases/latest"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/farin-works/luminesk-cli"></a>
     <a href="https://pypi.org/project/luminesk-cli/"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/luminesk-cli"></a>
-    <a href="https://github.com/task-v1/luminesk-cli/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/task-v1/luminesk-cli"></a>
-    <a href="https://luminesk.taskov1ch.xyz"><img alt="Docs" src="https://img.shields.io/badge/docs-online-0ea5e9"></a>
+    <a href="https://github.com/farin-works/luminesk-cli/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/farin-works/luminesk-cli"></a>
+    <a href="https://nesk.farin.cc"><img alt="Docs" src="https://img.shields.io/badge/docs-online-0ea5e9"></a>
   </p>
 </div>
+
+Luminesk-CLI is maintained by [Farin Works](https://github.com/farin-works).
+Documentation and installers are available at
+[nesk.farin.cc](https://nesk.farin.cc).
 
 ## What Luminesk does
 
@@ -40,13 +44,13 @@ does not require Python.
 Linux or macOS:
 
 ```bash
-curl -fsSL https://luminesk.taskov1ch.xyz/sh | sh -s -- --yes
+curl -fsSL https://nesk.farin.cc/sh | sh -s -- --yes
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://luminesk.taskov1ch.xyz/ps1 | iex
+irm https://nesk.farin.cc/ps1 | iex
 ```
 
 The installer detects the operating system and CPU, downloads the latest
@@ -78,7 +82,7 @@ Docker image, capabilities, and file changes before asking for confirmation.
 recipes. A remote install needs a new, empty destination directory. With pipx,
 use `pipx install luminesk-cli`. ZIP bundles for Linux, macOS, and Windows are
 also available on the
-[GitHub Releases](https://github.com/task-v1/luminesk-cli/releases/latest) page.
+[GitHub Releases](https://github.com/farin-works/luminesk-cli/releases/latest) page.
 
 ## Start, configure, and use the console
 
@@ -175,11 +179,11 @@ nesk lock --dir ./recipe
 nesk plan --dir ./recipe
 ```
 
-Read the [documentation](https://luminesk.taskov1ch.xyz),
-[Quick Start](https://luminesk.taskov1ch.xyz/docs/quick-start), and
-[Command Reference](https://luminesk.taskov1ch.xyz/docs/command-reference).
+Read the [documentation](https://nesk.farin.cc),
+[Quick Start](https://nesk.farin.cc/docs/quick-start), and
+[Command Reference](https://nesk.farin.cc/docs/command-reference).
 Luminesk 1.x instances require a
-[side-by-side migration](https://luminesk.taskov1ch.xyz/docs/migrating-to-2.0);
+[side-by-side migration](https://nesk.farin.cc/docs/migrating-to-2.0);
 their control state and instance formats are not interchangeable.
 
 ## Development
@@ -192,11 +196,11 @@ uv run pytest
 ```
 
 See
-[CONTRIBUTING.md](https://github.com/task-v1/luminesk-cli/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/farin-works/luminesk-cli/blob/main/CONTRIBUTING.md).
 Recipe trust, tested backups, and
 workload-specific validation remain the operator's responsibility.
 
 ## License
 
 GPL-3.0-or-later. See
-[LICENSE](https://github.com/task-v1/luminesk-cli/blob/main/LICENSE).
+[LICENSE](https://github.com/farin-works/luminesk-cli/blob/main/LICENSE).

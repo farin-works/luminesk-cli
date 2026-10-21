@@ -23,16 +23,16 @@ const config: Config = {
       "@context": "https://schema.org",
       "@type": "WebSite",
       name: "Luminesk-CLI",
-      url: "https://luminesk.taskov1ch.xyz/",
+      url: "https://nesk.farin.cc/",
     }),
   },
   ],
 
 
 
-  url: 'https://luminesk.taskov1ch.xyz',
+  url: 'https://nesk.farin.cc',
   baseUrl: '/',
-  organizationName: 'task-v1',
+  organizationName: 'farin-works',
   projectName: 'luminesk-cli',
 
   onBrokenLinks: 'throw',
@@ -69,7 +69,7 @@ const config: Config = {
             const items = await defaultCreateSitemapItems(params);
             
             return items.map((item) => {
-              if (item.url === 'https://luminesk.taskov1ch.xyz' || item.url === 'https://luminesk.taskov1ch.xyz/') {
+              if (item.url === 'https://nesk.farin.cc' || item.url === 'https://nesk.farin.cc/') {
                 return { ...item, priority: 1.0 };
               }
               
@@ -102,7 +102,7 @@ const config: Config = {
       items: [
         { to: '/docs', label: 'Docs', position: 'left' },
         {
-          href: 'https://github.com/task-v1/luminesk-cli',
+          href: 'https://github.com/farin-works/luminesk-cli',
           position: 'right',
           className: 'header-github-link navbar-sidebar__item--hidden',
           'aria-label': 'GitHub repository',
@@ -112,9 +112,9 @@ const config: Config = {
     footer: {
       style: 'dark',
       // links: [],
-      copyright: `© ${new Date().getFullYear()} Taskov1ch. All rights reserved.<br />
+      copyright: `© ${new Date().getFullYear()} Farin Works. All rights reserved.<br />
                 Luminesk-CLI is licensed under
-                <a href="https://github.com/task-v1/luminesk-cli/blob/main/LICENSE">GNU GPLv3 or later</a>.`,
+                <a href="https://github.com/farin-works/luminesk-cli/blob/main/LICENSE">GNU GPLv3 or later</a>.`,
     },
     prism: {
       theme: prismThemes.github,

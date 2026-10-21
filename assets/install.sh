@@ -119,7 +119,7 @@ fetch() {
     url=$1; destination=$2; limit=$3; redirects=0
     while :; do
         case "$url" in
-            https://api.github.com/repos/task-v1/luminesk-cli/releases/latest|https://github.com/task-v1/luminesk-cli/releases/download/*|https://release-assets.githubusercontent.com/*) ;;
+            https://api.github.com/repos/farin-works/luminesk-cli/releases/latest|https://github.com/farin-works/luminesk-cli/releases/download/*|https://release-assets.githubusercontent.com/*) ;;
             *) fail 'Release asset has an invalid download URL' ;;
         esac
         code=$(curl --proto '=https' --silent --show-error --connect-timeout 20 --max-time 300 --max-filesize "$limit" --max-redirs 0 -D "$WORK/headers" -o "$destination" -w '%{http_code}' "$url") || fail 'Download failed (network unavailable or size limit exceeded).'
@@ -130,12 +130,12 @@ fetch() {
         esac
     done
 }
-fetch https://api.github.com/repos/task-v1/luminesk-cli/releases/latest "$WORK/release" 4194304
+fetch https://api.github.com/repos/farin-works/luminesk-cli/releases/latest "$WORK/release" 4194304
 TAG=$(grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[1-9][0-9]*)?"' "$WORK/release" | sed -E 's/.*"(v?[0-9][^"]*)"$/\1/')
 printf '%s\n' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[1-9][0-9]*)?$' || fail 'Invalid release version'
 [ "$(printf '%s\n' "$TAG" | wc -l)" -eq 1 ] || fail 'Duplicate release version'
 VERSION=${TAG#v}; ASSET="luminesk-$OS-$ARCH.zip"
-BASE="https://github.com/task-v1/luminesk-cli/releases/download/$TAG"
+BASE="https://github.com/farin-works/luminesk-cli/releases/download/$TAG"
 fetch "$BASE/SHA256SUMS" "$WORK/sums" 1048576
 EXPECTED=$(awk -v name="$ASSET" '$2==name || $2=="*"name {print $1}' "$WORK/sums")
 printf '%s\n' "$EXPECTED" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release asset has no valid SHA-256 digest'

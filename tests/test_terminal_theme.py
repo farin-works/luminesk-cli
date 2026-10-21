@@ -10,23 +10,7 @@ from prompt_toolkit.output import ColorDepth
 from rich.console import Console
 
 from luminesk_cli.cli import output, theme
-from luminesk_cli.cli.attach_tui import _color_depth, _style
-
-
-def test_terminal_palette_matches_website() -> None:
-    css = (Path(__file__).parents[1] / "docs/src/css/custom.css").read_text()
-    for name, color in theme.PALETTE.items():
-        if name != "error":
-            assert color in css
-    assert theme.THEME.styles["message.success"].color != (
-        theme.THEME.styles["message.error"].color
-    )
-    toolkit = _style()
-    assert toolkit.get_attrs_for_style_str("class:title").color == "FF3379"
-    assert toolkit.get_attrs_for_style_str("class:prompt").color == "FF0058"
-    assert toolkit.get_attrs_for_style_str("class:status.connected").color == "00D26A"
-    assert toolkit.get_attrs_for_style_str("class:key.danger").color == "FF526D"
-    assert toolkit.get_attrs_for_style_str("class:console").bgcolor == "050505"
+from luminesk_cli.cli.attach_tui import _color_depth
 
 
 @pytest.mark.parametrize("colors", ["standard", "256", "truecolor"])

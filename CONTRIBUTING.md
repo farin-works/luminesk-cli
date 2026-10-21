@@ -11,7 +11,7 @@ Thanks for helping improve Luminesk-CLI.
 ## Local setup
 
 ```bash
-git clone https://github.com/task-v1/luminesk-cli
+git clone https://github.com/farin-works/luminesk-cli
 cd luminesk-cli
 uv sync --locked --extra dev
 ```

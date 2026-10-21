@@ -1,4 +1,4 @@
-"""Verified, crash-safe client for task-v1/luminesk-database."""
+"""Verified, crash-safe client for farin-works/luminesk-database."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from luminesk_cli.domain.catalog import (
     DATABASE_REPOSITORY,
+    DATABASE_REPOSITORY_ALIASES,
     GIT_REVISION_RE,
     MAX_CATALOG_SIZE,
     CatalogEntry,
@@ -34,7 +35,7 @@ from luminesk_cli.domain.primitives import validate_digest
 from luminesk_cli.domain.recipe import RecipeSnapshot
 from luminesk_cli.infrastructure.state import atomic_write, canonical_json_bytes
 
-DATABASE_OWNER = "task-v1"
+DATABASE_OWNER = "farin-works"
 DATABASE_NAME = "luminesk-database"
 API_ROOT = f"https://api.github.com/repos/{DATABASE_OWNER}/{DATABASE_NAME}"
 RAW_ROOT = f"https://raw.githubusercontent.com/{DATABASE_OWNER}/{DATABASE_NAME}"
@@ -68,7 +69,13 @@ class CatalogStore:
             }
         )
         self._write_once(index, content)
-        self._write_once(metadata, metadata_content)
+        if metadata.exists():
+            # A renamed repository must not rewrite immutable snapshot metadata.
+            self._load_revision(
+                snapshot.revision, expected_digest=snapshot.index_digest
+            )
+        else:
+            self._write_once(metadata, metadata_content)
         self._activate(snapshot)
 
     def load_active(self) -> CatalogSnapshot:
@@ -86,7 +93,7 @@ class CatalogStore:
             "indexDigest",
         }:
             raise ValidationError("active catalog pointer is invalid")
-        if value["repository"] != DATABASE_REPOSITORY:
+        if value["repository"] not in DATABASE_REPOSITORY_ALIASES:
             raise ValidationError("active catalog repository is not official")
         revision = value["revision"]
         if not isinstance(revision, str) or GIT_REVISION_RE.fullmatch(revision) is None:
@@ -133,7 +140,7 @@ class CatalogStore:
             "indexDigest",
         }:
             raise SecurityError("cached catalog snapshot metadata is invalid")
-        if metadata["repository"] != DATABASE_REPOSITORY:
+        if metadata["repository"] not in DATABASE_REPOSITORY_ALIASES:
             raise SecurityError("cached catalog snapshot repository is not official")
         if metadata["revision"] != revision:
             raise SecurityError(
@@ -386,7 +393,7 @@ class CatalogClient:
 def _github_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "luminesk/2.0 (https://github.com/task-v1/luminesk-cli)",
+        "User-Agent": "luminesk/2.0 (https://github.com/farin-works/luminesk-cli)",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = os.environ.get("GITHUB_TOKEN")

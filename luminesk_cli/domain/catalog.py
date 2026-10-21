@@ -29,7 +29,12 @@ from luminesk_cli.domain.primitives import (
 INDEX_VERSION = 1
 MAX_CATALOG_SIZE = 4 * 1024 * 1024
 MAX_CATALOG_ENTRIES = 10_000
-DATABASE_REPOSITORY = "github:task-v1/luminesk-database"
+DATABASE_REPOSITORY = "github:farin-works/luminesk-database"
+# Previously saved 2.x locks and catalog snapshots keep their original identity.
+DATABASE_REPOSITORY_ALIASES = (
+    DATABASE_REPOSITORY,
+    "github:task-v1/luminesk-database",
+)
 GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 
 

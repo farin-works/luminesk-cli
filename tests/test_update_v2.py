@@ -341,7 +341,7 @@ def update_lock(
         source=(
             "github:example/server"
             if kind == "github"
-            else "github:task-v1/luminesk-database"
+            else "github:farin-works/luminesk-database"
         ),
         revision=revision,
         ref="main" if kind == "github" else None,

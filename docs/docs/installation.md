@@ -28,13 +28,13 @@ Python is not required.
 On Linux or macOS:
 
 ```bash
-curl -fsSL https://luminesk.taskov1ch.xyz/sh | sh -s -- --yes
+curl -fsSL https://nesk.farin.cc/sh | sh -s -- --yes
 ```
 
 On Windows, open PowerShell and run:
 
 ```powershell
-irm https://luminesk.taskov1ch.xyz/ps1 | iex
+irm https://nesk.farin.cc/ps1 | iex
 ```
 
 The installer:
@@ -80,16 +80,16 @@ Run the same one-line command later to check for and install an update. To
 remove an installation owned by the script, use:
 
 ```bash
-curl -fsSL https://luminesk.taskov1ch.xyz/sh | sh -s -- --delete --yes
+curl -fsSL https://nesk.farin.cc/sh | sh -s -- --delete --yes
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://luminesk.taskov1ch.xyz/ps1))) "--delete"
+& ([scriptblock]::Create((irm https://nesk.farin.cc/ps1))) "--delete"
 ```
 
 These commands execute a remote script over HTTPS. You can review the complete
-[Linux/macOS installer](https://luminesk.taskov1ch.xyz/sh) or
-[Windows installer](https://luminesk.taskov1ch.xyz/ps1) before running it.
+[Linux/macOS installer](https://nesk.farin.cc/sh) or
+[Windows installer](https://nesk.farin.cc/ps1) before running it.
 
 ## Install with uv
 
@@ -150,7 +150,7 @@ an onedir ZIP for these targets:
 - `luminesk-windows-arm64.zip`
 
 Download the matching archive and `SHA256SUMS` from
-[GitHub Releases](https://github.com/task-v1/luminesk-cli/releases/latest),
+[GitHub Releases](https://github.com/farin-works/luminesk-cli/releases/latest),
 verify its checksum, and extract it. The archive contains a `nesk` directory;
 keep its executable and adjacent `_internal` directory together.
 

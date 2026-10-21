@@ -314,7 +314,7 @@ suggestions when available.
 nesk catalog update [--json] [--non-interactive]
 ```
 
-Downloads and verifies the latest official `task-v1/luminesk-database`
+Downloads and verifies the latest official `farin-works/luminesk-database`
 snapshot, then activates it crash-safely.
 
 ### `nesk catalog status`

@@ -18,7 +18,7 @@ export default function Header(): ReactNode {
         <div className={styles.navActions}>
           <Link to="/docs">Docs</Link>
           <a
-            href="https://github.com/task-v1/luminesk-cli"
+            href="https://github.com/farin-works/luminesk-cli"
             className={styles.githubLink}
           >
             GitHub <ArrowUpRight aria-hidden="true" />

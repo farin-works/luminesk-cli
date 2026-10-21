@@ -72,18 +72,18 @@ export default function Installation(): ReactNode {
           <div className={styles.installBody}>
             <h3>Linux / macOS</h3>
             <Command
-              command="curl -fsSL https://luminesk.taskov1ch.xyz/sh | sh -s -- --yes"
+              command="curl -fsSL https://nesk.farin.cc/sh | sh -s -- --yes"
               label="Linux or macOS installer"
             />
             <h3>Windows PowerShell</h3>
             <Command
-              command="irm https://luminesk.taskov1ch.xyz/ps1 | iex"
+              command="irm https://nesk.farin.cc/ps1 | iex"
               label="Windows installer"
             />
             <p>
               The installer verifies the binary’s SHA-256 before installing.
-              Review the <a href="https://luminesk.taskov1ch.xyz/sh">Unix</a> or{' '}
-              <a href="https://luminesk.taskov1ch.xyz/ps1">PowerShell</a> script
+              Review the <a href="https://nesk.farin.cc/sh">Unix</a> or{' '}
+              <a href="https://nesk.farin.cc/ps1">PowerShell</a> script
               before running it. Installer approval does not accept the
               Minecraft EULA.
             </p>
@@ -109,7 +109,7 @@ export default function Installation(): ReactNode {
           <div className={styles.installBody}>
             <p>
               Includes Python. Choose the target machine, verify{' '}
-              <a href="https://github.com/task-v1/luminesk-cli/releases/latest/download/SHA256SUMS">
+              <a href="https://github.com/farin-works/luminesk-cli/releases/latest/download/SHA256SUMS">
                 SHA256SUMS
               </a>
               , then extract the complete ZIP.
@@ -125,7 +125,7 @@ export default function Installation(): ReactNode {
                   {['amd64', 'arm64'].map((arch) => (
                     <a
                       key={arch}
-                      href={`https://github.com/task-v1/luminesk-cli/releases/latest/download/luminesk-${os}-${arch}.zip`}
+                      href={`https://github.com/farin-works/luminesk-cli/releases/latest/download/luminesk-${os}-${arch}.zip`}
                     >
                       {label} {arch.toUpperCase()}{' '}
                       <ArrowUpRight aria-hidden="true" />
