@@ -393,9 +393,20 @@ def test_windows_install_update_reinstall_and_uninstall(
     assert (cache / "world").read_text() == "keep"
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    [
+def test_windows_failed_updates_keep_working_launcher(
+    tmp_path: Path, windows_fixture_exe: Path
+) -> None:
+    result = windows_install(tmp_path, windows_fixture_exe)
+    assert result.returncode == 0, result.stdout + result.stderr
+    home = tmp_path / "home space Юникод"
+    launcher = home / ".local/bin/nesk.cmd"
+    previous = launcher.read_bytes()
+    metadata = home / ".local/share/luminesk/.metadata_one_line"
+    previous_metadata = metadata.read_bytes()
+
+    # Each rejected update must preserve the same installed baseline. Reinstalling
+    # it for every scenario dominates the Windows ARM64 runner's time budget.
+    for scenario in (
         "sha",
         "zip",
         "smoke",
@@ -410,25 +421,14 @@ def test_windows_install_update_reinstall_and_uninstall(
         "link",
         "oversize",
         "manifest-traversal",
-    ],
-)
-def test_windows_failed_update_keeps_working_launcher(
-    tmp_path: Path, windows_fixture_exe: Path, scenario: str
-) -> None:
-    result = windows_install(tmp_path, windows_fixture_exe)
-    assert result.returncode == 0, result.stdout + result.stderr
-    home = tmp_path / "home space Юникод"
-    launcher = home / ".local/bin/nesk.cmd"
-    previous = launcher.read_bytes()
-    metadata = home / ".local/share/luminesk/.metadata_one_line"
-    previous_metadata = metadata.read_bytes()
-    result = windows_install(
-        tmp_path, windows_fixture_exe, version="2.0.3", scenario=scenario
-    )
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert launcher.read_bytes() == previous
-    assert not list(home.rglob("outside"))
-    assert metadata.read_bytes() == previous_metadata
+    ):
+        result = windows_install(
+            tmp_path, windows_fixture_exe, version="2.0.3", scenario=scenario
+        )
+        assert result.returncode != 0, f"{scenario}: {result.stdout}{result.stderr}"
+        assert launcher.read_bytes() == previous, scenario
+        assert not list(home.rglob("outside")), scenario
+        assert metadata.read_bytes() == previous_metadata, scenario
 
 
 def test_windows_migrates_owned_onefile(
