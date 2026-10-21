@@ -75,8 +75,9 @@ test("renders installation and product content without JavaScript or user-agent 
   assert.match(html, /<details\b[^>]*open/);
   assert.doesNotMatch(html, /<canvas\b|gsap-fade-up/);
   for (const os of ["linux", "macos", "windows"])
-    for (const arch of ["amd64", "arm64"])
+    for (const arch of os === "windows" ? ["amd64"] : ["amd64", "arm64"])
       assert.ok(html.includes(`luminesk-${os}-${arch}.zip`));
+  assert.ok(!html.includes("luminesk-windows-arm64.zip"));
 });
 
 test("keeps the documentation menu inside documentation routes", async () => {

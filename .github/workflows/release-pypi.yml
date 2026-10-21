@@ -132,8 +132,6 @@ jobs:
             runner: macos-15-intel
           - name: windows-amd64
             runner: windows-latest
-          - name: windows-arm64
-            runner: windows-11-arm
     permissions:
       contents: read
       id-token: write

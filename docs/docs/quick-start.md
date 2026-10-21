@@ -16,7 +16,7 @@ Linux or macOS:
 curl -fsSL https://nesk.farin.cc/sh | sh -s -- --yes
 ```
 
-Windows PowerShell:
+Windows AMD64 (x64), PowerShell:
 
 ```powershell
 irm https://nesk.farin.cc/ps1 | iex

@@ -57,7 +57,7 @@ export default function Installation(): ReactNode {
         </p>
         <p className={styles.requirements}>
           Docker Engine or Docker Desktop is required for servers. Python 3.13+
-          is required only for Python tool installs. Windows uses Linux
+          is required only for Python tool installs. Windows AMD64 uses Linux
           containers.
         </p>
         <Link to="/docs/installation" className={styles.textLink}>
@@ -122,7 +122,7 @@ export default function Installation(): ReactNode {
               ].map(([os, label]) => (
                 <div key={os}>
                   <h3>{label}</h3>
-                  {['amd64', 'arm64'].map((arch) => (
+                  {(os === 'windows' ? ['amd64'] : ['amd64', 'arm64']).map((arch) => (
                     <a
                       key={arch}
                       href={`https://github.com/farin-works/luminesk-cli/releases/latest/download/luminesk-${os}-${arch}.zip`}

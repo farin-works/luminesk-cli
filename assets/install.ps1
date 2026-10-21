@@ -146,7 +146,7 @@ function Test-Bundle([string]$Executable, [string]$Version) {
 }
 $rawArch = $env:PROCESSOR_ARCHITEW6432
 if (-not $rawArch) { $rawArch = $env:PROCESSOR_ARCHITECTURE }
-switch ($rawArch) { { $_ -in 'AMD64','x86_64','x64' } { $arch='amd64' }; 'ARM64' { $arch='arm64' }; default { throw "Unsupported architecture: $rawArch" } }
+switch ($rawArch) { { $_ -in 'AMD64','x86_64','x64' } { $arch='amd64' }; default { throw "Unsupported architecture: $rawArch. Windows requires AMD64 (x64)." } }
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $bin = Join-Path $HOME '.local\bin'; $state = Join-Path $HOME '.local\share\luminesk'
 $relativeRoot = '..\share\luminesk\app'

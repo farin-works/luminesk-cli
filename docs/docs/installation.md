@@ -39,7 +39,7 @@ irm https://nesk.farin.cc/ps1 | iex
 
 The installer:
 
-- detects the operating system and AMD64/ARM64 architecture;
+- detects AMD64 or ARM64 on Linux/macOS, and AMD64 (x64) on Windows;
 - selects the matching asset from the latest GitHub release;
 - requires SHA-256 from GitHub release metadata (Windows) or the release
   `SHA256SUMS` (Linux/macOS), and verifies the ZIP before extracting any files;
@@ -147,7 +147,6 @@ an onedir ZIP for these targets:
 - `luminesk-macos-amd64.zip`
 - `luminesk-macos-arm64.zip`
 - `luminesk-windows-amd64.zip`
-- `luminesk-windows-arm64.zip`
 
 Download the matching archive and `SHA256SUMS` from
 [GitHub Releases](https://github.com/farin-works/luminesk-cli/releases/latest),
@@ -228,8 +227,8 @@ directory containing `nesk` to the shell `PATH` and keep `_internal` beside it.
 
 ### Windows
 
-Use Python 3.13+ with uv, or download the `windows-amd64`/`windows-arm64`
-bundle that matches the machine. After changing the user `Path`, start a new
+Windows requires AMD64 (x64). Use Python 3.13+ with uv, or download the
+`windows-amd64` bundle. After changing the user `Path`, start a new
 PowerShell session and check resolution with:
 
 ```powershell

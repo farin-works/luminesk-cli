@@ -389,7 +389,8 @@ export default function Landing(): ReactNode {
             </article>
           </div>
           <p className={styles.platformNote}>
-            * CLI bundles target AMD64 and ARM64. Each server recipe and Docker
+            * Linux/macOS bundles target AMD64 and ARM64; Windows targets AMD64.
+            Each server recipe and Docker
             image must support your target platform.
           </p>
           <div className={styles.providerLinks}>

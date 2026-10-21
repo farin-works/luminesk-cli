@@ -112,9 +112,9 @@ url = "https://github.com/example/lumi-recipe"
 | `repository` | table | no | none | Contains the recipe repository metadata. |
 | `repository.url` | HTTPS URL | yes if table exists | — | Absolute HTTPS URL without embedded credentials or fragment. |
 
-The CLI currently normalizes these host targets: `linux/amd64`,
-`linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`, and
-`windows/arm64`.
+Supported CLI hosts are `linux/amd64`, `linux/arm64`, `darwin/amd64`,
+`darwin/arm64`, and `windows/amd64`. Recipe targets follow the Docker Engine's
+platform, independently of the CLI host.
 
 ## `[inputs.<name>]`
 

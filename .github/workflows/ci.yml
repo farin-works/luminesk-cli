@@ -85,9 +85,6 @@ jobs:
           - name: windows-amd64-py313
             runner: windows-latest
             python: "3.13"
-          - name: windows-arm64-py313
-            runner: windows-11-arm
-            python: "3.13"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

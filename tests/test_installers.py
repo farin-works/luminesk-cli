@@ -18,7 +18,6 @@ BUNDLE_ASSETS = {
     "luminesk-macos-amd64.zip",
     "luminesk-macos-arm64.zip",
     "luminesk-windows-amd64.zip",
-    "luminesk-windows-arm64.zip",
 }
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -122,6 +121,13 @@ def test_release_asset_verifier_accepts_only_complete_hashed_set(
 
     valid = subprocess.run(command, check=False, capture_output=True, text=True)
     assert valid.returncode == 0, valid.stderr
+
+    unsupported = tmp_path / "luminesk-windows-arm64.zip"
+    unsupported.write_bytes(b"unsupported bundle")
+    unexpected = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert unexpected.returncode != 0
+    assert "unexpected release assets: luminesk-windows-arm64.zip" in unexpected.stderr
+    unsupported.unlink()
 
     (tmp_path / "luminesk-linux-amd64.zip").unlink()
     invalid = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -324,9 +330,12 @@ def windows_install(
         installer = installer.replace(
             "$rawArch = $env:PROCESSOR_ARCHITEW6432", "$rawArch = 'unsupported'"
         )
+    if scenario == "arm64":
+        installer = installer.replace(
+            "$rawArch = $env:PROCESSOR_ARCHITEW6432", "$rawArch = 'ARM64'"
+        )
     prelude = r"""
 $TestHome = $env:LUMINESK_TEST_HOME
-# Windows can rewrite architecture variables when launching PowerShell on ARM64.
 # Set the fixture architecture inside the child process, before installer code.
 $env:PROCESSOR_ARCHITECTURE = 'AMD64'
 $env:PROCESSOR_ARCHITEW6432 = 'AMD64'
@@ -405,7 +414,7 @@ def test_windows_failed_updates_keep_working_launcher(
     previous_metadata = metadata.read_bytes()
 
     # Each rejected update must preserve the same installed baseline. Reinstalling
-    # it for every scenario dominates the Windows ARM64 runner's time budget.
+    # it for every scenario repeats the same expensive setup.
     for scenario in (
         "sha",
         "zip",
@@ -415,6 +424,7 @@ def test_windows_failed_updates_keep_working_launcher(
         "post-switch",
         "lock",
         "architecture",
+        "arm64",
         "traversal",
         "absolute",
         "duplicate",
@@ -426,6 +436,8 @@ def test_windows_failed_updates_keep_working_launcher(
             tmp_path, windows_fixture_exe, version="2.0.3", scenario=scenario
         )
         assert result.returncode != 0, f"{scenario}: {result.stdout}{result.stderr}"
+        if scenario == "arm64":
+            assert "Unsupported architecture: ARM64" in result.stderr
         assert launcher.read_bytes() == previous, scenario
         assert not list(home.rglob("outside")), scenario
         assert metadata.read_bytes() == previous_metadata, scenario

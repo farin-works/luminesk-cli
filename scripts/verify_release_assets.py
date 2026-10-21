@@ -15,7 +15,6 @@ BUNDLE_ASSETS = {
     "luminesk-macos-amd64.zip",
     "luminesk-macos-arm64.zip",
     "luminesk-windows-amd64.zip",
-    "luminesk-windows-arm64.zip",
 }
 CHECKSUM_RE = re.compile(r"^([0-9a-f]{64}) [ *]([^/\\]+)$")
 
