@@ -2,6 +2,15 @@
 # Official onedir installer. No Python interpreter is needed on the host.
 set -eu
 umask 077
+RESET=''; PRIMARY=''; GREEN=''; DIM=''
+if [ -t 1 ] && [ "${TERM:-}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+    ESC=$(printf '\033')
+    RESET="${ESC}[0m"; PRIMARY="${ESC}[1;35m"; GREEN="${ESC}[32m"; DIM="${ESC}[2m"
+fi
+heading() { printf '\n%s%s%s\n' "$PRIMARY" "$1" "$RESET"; }
+step() { printf '%s  >%s %s\n' "$PRIMARY" "$RESET" "$1"; }
+success() { printf '%s  OK%s %s\n' "$GREEN" "$RESET" "$1"; }
+detail() { printf '  %s%-15s%s: %s\n' "$DIM" "$1" "$RESET" "$2"; }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 YES=false; DELETE=false
 for arg in "$@"; do
@@ -12,7 +21,7 @@ confirm() {
     [ -t 0 ] || fail 'Use --yes when piping this installer.'
     printf '%s [y/N]: ' "$1"
     read -r answer
-    case "$answer" in y|Y|yes|YES) return 0 ;; *) exit 0 ;; esac
+    case "$answer" in y|Y|yes|YES) return 0 ;; *) echo 'Cancelled.'; exit 0 ;; esac
 }
 meta() { if [ -f "$META" ]; then sed -n "s/^$1=//p" "$META"; fi; }
 # Refuse links in every existing ancestor, including the installation root.
@@ -23,6 +32,8 @@ no_links() {
         cursor=$(dirname "$cursor")
     done
 }
+heading 'Luminesk installer'
+step 'Checking system and existing installation...'
 case "$(uname -s)" in Linux) OS=linux ;; Darwin) OS=macos ;; *) fail 'Unsupported OS' ;; esac
 case "$(uname -m)" in x86_64|amd64) ARCH=amd64 ;; arm64|aarch64) ARCH=arm64 ;; *) fail 'Unsupported architecture' ;; esac
 BIN="$HOME/.local/bin"
@@ -37,6 +48,7 @@ mkdir "$LOCK" 2>/dev/null || fail "Another installation is active, or was interr
 WORK=''; NEXT=''; ROLLBACK=false
 cleanup() {
     if [ "$ROLLBACK" = true ]; then
+        printf '%s\n' 'Restoring the previous installation...' >&2
         if [ -e "$WORK/previous-entry" ] || [ -L "$WORK/previous-entry" ]; then
             mv -f "$WORK/previous-entry" "$TARGET" || { echo "Rollback failed; recovery files retained at $WORK" >&2; return; }
         else
@@ -76,6 +88,7 @@ fi
 if [ "$DELETE" = true ]; then
     [ "$OWNED" = true ] || { echo 'Luminesk is not installed.'; exit 0; }
     confirm 'Remove the installer-owned application (keep instances and cache)?'
+    step 'Checking application use and ownership...'
     command -v lsof >/dev/null || fail 'lsof is required to verify that no running process uses the application before removal.'
     # Include loaded libraries: deleting only a retained executable inode can
     # still break a running process when it lazily imports another module.
@@ -94,6 +107,7 @@ if [ "$DELETE" = true ]; then
             [ -z "$(comm -23 "$WORK/remove-actual" "$WORK/remove-expected")" ] || fail "Unexpected user files in $version; move them outside the application before uninstalling."
         done
     fi
+    step 'Removing installer-owned application files...'
     if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then mv "$TARGET" "$WORK/removed-entry"; fi
     if [ -d "$ROOT/versions" ]; then
         no_links "$ROOT/versions"
@@ -105,7 +119,7 @@ if [ "$DELETE" = true ]; then
         done
     fi
     rm -f "$META"
-    echo 'Luminesk uninstalled; instances and cache were preserved.'
+    success 'Luminesk uninstalled; instances and cache were preserved.'
     exit 0
 fi
 for tool in curl unzip awk head sort cmp; do command -v "$tool" >/dev/null || fail "$tool is required"; done
@@ -117,12 +131,16 @@ sha() {
 # Follow redirects ourselves so every destination is checked before connecting.
 fetch() {
     url=$1; destination=$2; limit=$3; redirects=0
+    progress_option=--silent
+    if [ "${4:-}" = progress ] && [ -t 2 ] && [ "${TERM:-}" != dumb ]; then
+        progress_option=--progress-bar
+    fi
     while :; do
         case "$url" in
             https://api.github.com/repos/farin-works/luminesk-cli/releases/latest|https://github.com/farin-works/luminesk-cli/releases/download/*|https://release-assets.githubusercontent.com/*) ;;
             *) fail 'Release asset has an invalid download URL' ;;
         esac
-        code=$(curl --proto '=https' --silent --show-error --connect-timeout 20 --max-time 300 --max-filesize "$limit" --max-redirs 0 -D "$WORK/headers" -o "$destination" -w '%{http_code}' "$url") || fail 'Download failed (network unavailable or size limit exceeded).'
+        code=$(curl --proto '=https' "$progress_option" --show-error --connect-timeout 20 --max-time 300 --max-filesize "$limit" --max-redirs 0 -D "$WORK/headers" -o "$destination" -w '%{http_code}' "$url") || fail 'Download failed (network unavailable or size limit exceeded).'
         case "$code" in
             200) [ "$(wc -c < "$destination")" -le "$limit" ] || fail 'Download too large'; return ;;
             301|302|303|307|308) url=$(sed -n 's/^[Ll]ocation: *//p' "$WORK/headers" | tr -d '\r'); redirects=$((redirects + 1)); [ "$redirects" -le 5 ] || fail 'Too many redirects' ;;
@@ -130,6 +148,7 @@ fetch() {
         esac
     done
 }
+step 'Checking the latest release...'
 fetch https://api.github.com/repos/farin-works/luminesk-cli/releases/latest "$WORK/release" 4194304
 TAG=$(grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[1-9][0-9]*)?"' "$WORK/release" | sed -E 's/.*"(v?[0-9][^"]*)"$/\1/')
 printf '%s\n' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[1-9][0-9]*)?$' || fail 'Invalid release version'
@@ -140,10 +159,30 @@ fetch "$BASE/SHA256SUMS" "$WORK/sums" 1048576
 EXPECTED=$(awk -v name="$ASSET" '$2==name || $2=="*"name {print $1}' "$WORK/sums")
 printf '%s\n' "$EXPECTED" | grep -Eq '^[0-9a-f]{64}$' || fail 'Release asset has no valid SHA-256 digest'
 [ "$(printf '%s\n' "$EXPECTED" | wc -l)" -eq 1 ] || fail 'Duplicate checksum'
-if [ -e "$TARGET" ]; then printf 'Installed: '; "$TARGET" --version || fail 'Existing command failed; inspect installation before updating.'; fi
+INSTALLED='Not installed'; INSTALL_STATUS='New installation'
+if [ -e "$TARGET" ]; then
+    INSTALLED=$("$TARGET" --version) || fail 'Existing command failed; inspect installation before updating.'
+    LOCAL_VERSION=${INSTALLED#Luminesk }
+    if [ "$LOCAL_VERSION" = "$VERSION" ]; then
+        INSTALL_STATUS='Up to date (reinstall)'
+    else
+        INSTALL_STATUS="Version change ($LOCAL_VERSION -> $VERSION)"
+    fi
+fi
+heading 'Installation summary'
+detail 'System' "$OS-$ARCH"
+detail 'Installed' "$INSTALLED"
+detail 'Latest release' "$VERSION"
+detail 'Status' "$INSTALL_STATUS"
+detail 'Command' "$TARGET"
+printf '\n'
 confirm "Install Luminesk $VERSION ($OS-$ARCH)?"
-fetch "$BASE/$ASSET" "$WORK/bundle.zip" 536870912
+step "Downloading Luminesk $VERSION ($ASSET)..."
+fetch "$BASE/$ASSET" "$WORK/bundle.zip" 536870912 progress
+step 'Verifying archive checksum...'
 [ "$(sha "$WORK/bundle.zip")" = "$EXPECTED" ] || fail 'Checksum verification failed'
+success 'Archive checksum verified.'
+step 'Extracting and verifying bundle files...'
 # Never ask unzip to choose output paths or create links.
 unzip -p "$WORK/bundle.zip" nesk/.bundle-manifest | head -c 4194305 > "$WORK/manifest"
 [ -s "$WORK/manifest" ] && [ "$(wc -c < "$WORK/manifest")" -le 4194304 ] || fail 'Invalid bundle inventory'
@@ -180,9 +219,11 @@ while read -r kind mode size target path; do
     while [ "$parent" != . ]; do prefix="../$prefix"; parent=$(dirname "$parent"); done
     ln -s "$prefix$target" "$WORK/nesk/$path"
 done < "$WORK/manifest"
+step 'Checking application imports, version and help...'
 "$WORK/nesk/nesk" --_bundle-check
 "$WORK/nesk/nesk" --version | grep -F "$VERSION" >/dev/null || fail 'Bundle version mismatch'
 "$WORK/nesk/nesk" --help >/dev/null
+step 'Activating the verified application...'
 no_links "$ROOT/versions"; mkdir -p "$ROOT/versions"; chmod 755 "$ROOT/versions"
 DEST="$ROOT/versions/$VERSION-$(basename "$WORK" | cut -d. -f3)"
 [ ! -e "$DEST" ] || fail 'Version directory already exists'
@@ -215,6 +256,7 @@ if [ -f "$WORK/meta" ]; then mv "$WORK/meta" "$META"; fi
 # Flush prepared files before reporting the activation as committed.
 sync
 ROLLBACK=false
+step 'Configuring PATH...'
 case ":$PATH:" in *:"$BIN":*) ;; *)
     # The parent shell cannot be modified by a piped child. Persist for new shells.
     for profile in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
@@ -225,4 +267,22 @@ case ":$PATH:" in *:"$BIN":*) ;; *)
     done
     echo 'PATH configured. Open a new terminal to run nesk.' ;;
 esac
-echo "Luminesk $VERSION installed. Previous versions retained for running processes."
+success "Luminesk $VERSION installed."
+detail 'Command' "$TARGET"
+printf '  Previous versions retained for running processes.\n'
+heading 'Next steps'
+printf '  Check the installed version: nesk --version\n'
+if [ "$OS" = linux ]; then
+    printf '  Install or start Docker Engine / Docker Desktop.\n'
+    printf '  Docker must be accessible to the same user that runs nesk.\n'
+else
+    printf '  Install and start Docker Desktop before running servers.\n'
+fi
+printf '  Check Docker and Luminesk:\n    docker version\n    nesk doctor\n'
+printf '  Explore recipes and commands:\n    nesk catalog update\n    nesk --help\n'
+if [ "$OS" = linux ]; then
+    heading 'Docker file permissions'
+    printf '  For recipes exposing runtime_uid/runtime_gid, use your host identity:\n'
+    printf '    nesk install NAME --set runtime_uid=$(id -u) --set runtime_gid=$(id -g)\n'
+fi
+printf '\n  Installation and Docker guide: https://nesk.farin.cc/docs/installation\n'

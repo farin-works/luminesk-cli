@@ -339,7 +339,7 @@ $TestHome = $env:LUMINESK_TEST_HOME
 # Set the fixture architecture inside the child process, before installer code.
 $env:PROCESSOR_ARCHITECTURE = 'AMD64'
 $env:PROCESSOR_ARCHITEW6432 = 'AMD64'
-function Receive-VerifiedHost($Url, $Destination, $Limit) {
+function Receive-VerifiedHost($Url, $Destination, $Limit, [switch]$ShowProgress) {
     if ($env:LUMINESK_TEST_SCENARIO -eq 'network') { throw 'simulated network failure' }
     if ($Url -notmatch '^https://(?:api\.github\.com/repos|github\.com)/farin-works/luminesk-cli/releases/') { throw 'unexpected release repository' }
     $name = if ($Url.EndsWith('/latest')) { 'release.json' } else { 'bundle.zip' }
@@ -382,9 +382,13 @@ function Receive-VerifiedHost($Url, $Destination, $Limit) {
 def test_windows_install_update_reinstall_and_uninstall(
     tmp_path: Path, windows_fixture_exe: Path
 ) -> None:
-    for version in ("2.0.2", "2.0.3", "2.0.3"):
+    for version, installed in (("2.0.2", None), ("2.0.3", "2.0.2"), ("2.0.3", "2.0.3")):
         result = windows_install(tmp_path, windows_fixture_exe, version=version)
         assert result.returncode == 0, result.stdout + result.stderr
+        assert_installation_output(result.stdout, version, installed)
+        assert "windows-amd64" in result.stdout
+        assert "Docker Desktop" in result.stdout
+        assert "Linux containers" in result.stdout
     home = tmp_path / "home space Юникод"
     launcher = home / ".local/bin/nesk.cmd"
     assert launcher.is_file()
@@ -397,9 +401,50 @@ def test_windows_install_update_reinstall_and_uninstall(
     (cache / "world").write_text("keep")
     result = windows_install(tmp_path, windows_fixture_exe, delete=True)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "Removing installer-owned application files..." in result.stdout
+    assert "instances and cache were preserved" in result.stdout
+    assert "Next steps" not in result.stdout
     assert not launcher.exists()
     assert unrelated.read_text() == "keep"
     assert (cache / "world").read_text() == "keep"
+
+
+def test_powershell_download_reports_percentage_or_received_bytes(
+    tmp_path: Path,
+) -> None:
+    shell = shutil.which("powershell") or shutil.which("pwsh")
+    if shell is None:
+        pytest.skip("PowerShell is required for download progress output")
+    installer = (REPOSITORY_ROOT / "assets/install.ps1").read_text(encoding="utf-8")
+    definitions = installer[: installer.index("function Test-Bundle(")]
+    harness = tmp_path / "progress.ps1"
+    harness.write_text(
+        definitions
+        + """
+function Write-Progress($Id, $Activity, $Status, $PercentComplete, $ErrorAction) {
+    [pscustomobject]@{Activity=$Activity; Status=$Status; Percent=$PercentComplete}
+}
+@(
+    Write-DownloadProgress 5242880 10485760
+    Write-DownloadProgress 10485760 10485760
+    Write-DownloadProgress 5242880 -1
+) | ConvertTo-Json -Compress
+""",
+        encoding="utf-8-sig",
+    )
+    result = subprocess.run(
+        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    reports = json.loads(result.stdout)
+    assert [report["Percent"] for report in reports] == [50, 100, -1]
+    assert all(report["Activity"] == "Downloading Luminesk" for report in reports)
+    assert "50%" in reports[0]["Status"]
+    assert "MiB received" in reports[2]["Status"]
+    assert "%" not in reports[2]["Status"]
 
 
 def test_windows_failed_updates_keep_working_launcher(
@@ -436,6 +481,8 @@ def test_windows_failed_updates_keep_working_launcher(
             tmp_path, windows_fixture_exe, version="2.0.3", scenario=scenario
         )
         assert result.returncode != 0, f"{scenario}: {result.stdout}{result.stderr}"
+        assert "Luminesk 2.0.3 installed." not in result.stdout
+        assert "Next steps" not in result.stdout
         if scenario == "arm64":
             assert "Unsupported architecture: ARM64" in result.stderr
         assert launcher.read_bytes() == previous, scenario
@@ -482,6 +529,8 @@ def posix_install(
     scenario: str = "ok",
     delete: bool = False,
     bundle_directory: Path | None = None,
+    use_curl: bool = False,
+    stderr_fd: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     source = directory / "fixture/nesk"
     (source / "_internal").mkdir(parents=True, exist_ok=True)
@@ -510,7 +559,8 @@ def posix_install(
     (directory / "sums").write_text(f"{digest}  luminesk-{target_os}-amd64.zip\n")
     installer = (REPOSITORY_ROOT / "assets/install.sh").read_text(encoding="utf-8")
     installer = installer.replace('if [ "$(id -u)" = 0 ]; then', "if false; then")
-    installer = installer.replace("fetch() {", "original_fetch() {")
+    if not use_curl:
+        installer = installer.replace("fetch() {", "original_fetch() {")
     installer = installer.replace(
         'case "$(uname -s)"',
         'case "Darwin"' if sys.platform == "darwin" else 'case "Linux"',
@@ -554,6 +604,27 @@ fetch() {
         '#!/bin/sh\nif [ "$LUMINESK_TEST_SCENARIO" = busy ]; then echo 123; exit 0; fi\nexit 1\n'
     )
     lsof.chmod(0o755)
+    if use_curl:
+        curl = host_tools / "curl"
+        curl.write_text(
+            """#!/bin/sh
+printf '%s\\n' "$@" >> "$LUMINESK_TEST_DATA/curl-args"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) destination=$2; shift ;;
+        -D) headers=$2; shift ;;
+    esac
+    url=$1
+    shift
+done
+case "$url" in */latest) name=release ;; */SHA256SUMS) name=sums ;; *) name=bundle.zip ;; esac
+cp "$LUMINESK_TEST_DATA/$name" "$destination"
+: > "$headers"
+printf 200
+""",
+            encoding="utf-8",
+        )
+        curl.chmod(0o755)
     env = dict(
         os.environ,
         HOME=str(home),
@@ -575,17 +646,109 @@ fetch() {
         ["sh", str(harness), "--yes", *(["--delete"] if delete else [])],
         env=env,
         cwd=directory,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=stderr_fd if stderr_fd is not None else subprocess.PIPE,
         text=True,
         check=False,
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX terminal integration")
+@pytest.mark.parametrize(
+    ("terminal", "term"), [(False, "xterm"), (True, "xterm"), (True, "dumb")]
+)
+def test_posix_download_progress_keeps_network_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal: bool, term: str
+) -> None:
+    import pty
+
+    monkeypatch.setenv("TERM", term)
+    with_fds = pty.openpty() if terminal else None
+    try:
+        result = posix_install(
+            tmp_path, use_curl=True, stderr_fd=with_fds[1] if with_fds else None
+        )
+    finally:
+        if with_fds:
+            os.close(with_fds[0])
+            os.close(with_fds[1])
+    assert result.returncode == 0, result.stdout + (result.stderr or "")
+    arguments = (tmp_path / "curl-args").read_text().splitlines()
+    progress = terminal and term != "dumb"
+    assert arguments.count("--progress-bar") == int(progress)
+    assert arguments.count("--silent") == (2 if progress else 3)
+    # Progress changes only presentation, including when curl's HTTP code is
+    # captured by the installer. All three requests keep the transport limits.
+    assert arguments.count("--show-error") == 3
+    for option, value in (
+        ("--proto", "=https"),
+        ("--connect-timeout", "20"),
+        ("--max-time", "300"),
+        ("--max-redirs", "0"),
+        ("-w", "%{http_code}"),
+    ):
+        values = [arguments[i + 1] for i, arg in enumerate(arguments) if arg == option]
+        assert values == [value] * 3
+    limits = [
+        arguments[i + 1] for i, arg in enumerate(arguments) if arg == "--max-filesize"
+    ]
+    assert limits == ["4194304", "1048576", "536870912"]
+
+
+def assert_installation_output(
+    output: str, version: str, installed: str | None
+) -> None:
+    messages = (
+        "Luminesk installer",
+        "Checking system and existing installation...",
+        "Checking the latest release...",
+        "Installation summary",
+        "Downloading Luminesk",
+        "Verifying archive checksum...",
+        "Archive checksum verified.",
+        "Extracting and verifying bundle files...",
+        "Checking application imports, version and help...",
+        "Activating the verified application...",
+        "Configuring PATH...",
+        f"Luminesk {version} installed.",
+        "Next steps",
+        "nesk --version",
+        "docker version",
+        "nesk doctor",
+        "nesk --help",
+    )
+    positions = [output.index(message) for message in messages]
+    assert positions == sorted(positions)
+    assert f"Latest release : {version}" in output
+    if installed is None:
+        assert "Installed      : Not installed" in output
+        assert "Status         : New installation" in output
+    else:
+        assert f"Installed      : Luminesk {installed}" in output
+        status = (
+            "Up to date (reinstall)"
+            if version == installed
+            else f"Version change ({installed} -> {version})"
+        )
+        assert f"Status         : {status}" in output
+    assert "Command        : " in output
+    assert "\x1b[" not in output
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX installer integration")
 def test_posix_install_update_reinstall_and_remove(tmp_path: Path) -> None:
-    for version in ("2.0.2", "2.0.3", "2.0.3"):
+    for version, installed in (("2.0.2", None), ("2.0.3", "2.0.2"), ("2.0.3", "2.0.3")):
         result = posix_install(tmp_path, version=version)
         assert result.returncode == 0, result.stdout + result.stderr
+        assert_installation_output(result.stdout, version, installed)
+        if sys.platform == "darwin":
+            assert "macos-amd64" in result.stdout
+            assert "Docker Desktop" in result.stdout
+        else:
+            assert "linux-amd64" in result.stdout
+            assert (
+                "--set runtime_uid=$(id -u) --set runtime_gid=$(id -g)" in result.stdout
+            )
     home = tmp_path / "home space Юникод"
     launcher = home / ".local/bin/nesk"
     assert launcher.is_symlink()
@@ -603,6 +766,9 @@ def test_posix_install_update_reinstall_and_remove(tmp_path: Path) -> None:
     other.write_text("keep")
     result = posix_install(tmp_path, delete=True)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "Removing installer-owned application files..." in result.stdout
+    assert "instances and cache were preserved" in result.stdout
+    assert "Next steps" not in result.stdout
     assert not launcher.is_symlink()
     assert other.read_text() == "keep"
 
@@ -634,6 +800,8 @@ def test_posix_failed_update_keeps_old_version(tmp_path: Path, scenario: str) ->
     old = launcher.readlink()
     result = posix_install(tmp_path, scenario=scenario, version="2.0.3")
     assert result.returncode != 0, result.stdout + result.stderr
+    assert "Luminesk 2.0.3 installed." not in result.stdout
+    assert "Next steps" not in result.stdout
     assert launcher.readlink() == old
 
 

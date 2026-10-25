@@ -1,5 +1,14 @@
 <# Official Windows onedir installer; compatible with Windows PowerShell 5.1. #>
 $ErrorActionPreference = 'Stop'
+function Write-InstallerLine([string]$Message, [ConsoleColor]$Color = 'Gray') {
+    if (-not [Console]::IsOutputRedirected -and $env:TERM -ne 'dumb' -and -not $env:NO_COLOR) {
+        Write-Host $Message -ForegroundColor $Color
+    } else { Write-Host $Message }
+}
+function Write-Heading([string]$Title) { Write-InstallerLine "`n$Title" Magenta }
+function Write-Step([string]$Message) { Write-InstallerLine "  > $Message" Magenta }
+function Write-Success([string]$Message) { Write-InstallerLine "  OK $Message" Green }
+function Write-Detail([string]$Label, [string]$Value) { Write-InstallerLine ('  {0,-15}: {1}' -f $Label, $Value) }
 $AssumeYes = $false; $DeleteMode = $false
 foreach ($argument in $args) {
     switch ($argument) {
@@ -10,7 +19,9 @@ foreach ($argument in $args) {
 }
 function Confirm-Action([string]$Message) {
     if ($AssumeYes) { return $true }
-    return (Read-Host "$Message [y/N]") -match '^(y|yes)$'
+    $confirmed = (Read-Host "$Message [y/N]") -match '^(y|yes)$'
+    if (-not $confirmed) { Write-InstallerLine 'Cancelled.' }
+    return $confirmed
 }
 function Assert-NoLinks([string]$Path) {
     $cursor = [IO.Path]::GetFullPath($Path)
@@ -45,7 +56,16 @@ function Write-Atomic([string]$Path, [string]$Text) {
     } finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
 }
 function Get-Sha([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
-function Receive-VerifiedHost([string]$Url, [string]$Destination, [long]$Limit) {
+function Write-DownloadProgress([long]$Received, [long]$Length) {
+    $percent = -1
+    $status = '{0:N1} MiB received' -f ($Received / 1MB)
+    if ($Length -gt 0) {
+        $percent = [int][Math]::Min(100, [Math]::Floor(100.0 * $Received / $Length))
+        $status = '{0}% - {1:N1} / {2:N1} MiB' -f $percent, ($Received / 1MB), ($Length / 1MB)
+    }
+    Write-Progress -Id 1 -Activity 'Downloading Luminesk' -Status $status -PercentComplete $percent -ErrorAction SilentlyContinue
+}
+function Receive-VerifiedHost([string]$Url, [string]$Destination, [long]$Limit, [switch]$ShowProgress) {
     # Explicit redirects, bounded streaming, and no ambient credentials.
     for ($redirect = 0; $redirect -le 5; $redirect++) {
         if ($Url -notmatch '^https://(?:api\.github\.com/repos/farin-works/luminesk-cli/releases/latest|github\.com/farin-works/luminesk-cli/releases/download/[^?#]+|release-assets\.githubusercontent\.com/[^\r\n]*)$') { throw 'Release asset has an invalid download URL' }
@@ -60,16 +80,28 @@ function Receive-VerifiedHost([string]$Url, [string]$Destination, [long]$Limit) 
             if ([int]$response.StatusCode -ne 200 -or $response.ContentLength -gt $Limit) { throw 'Invalid or oversized download' }
             $inputStream = $response.GetResponseStream()
             $outputStream = [IO.File]::Create($Destination)
+            $displayProgress = $ShowProgress -and -not [Console]::IsOutputRedirected -and $env:TERM -ne 'dumb'
             try {
                 $buffer = New-Object byte[] 65536
                 [long]$total = 0
+                if ($displayProgress) {
+                    Write-DownloadProgress 0 $response.ContentLength
+                    $progressTimer = [Diagnostics.Stopwatch]::StartNew()
+                }
                 while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
                     $total += $count
                     if ($total -gt $Limit) { throw 'Download size limit exceeded' }
                     $outputStream.Write($buffer, 0, $count)
+                    if ($displayProgress -and ($progressTimer.ElapsedMilliseconds -ge 100 -or $total -eq $response.ContentLength)) {
+                        Write-DownloadProgress $total $response.ContentLength
+                        $progressTimer.Restart()
+                    }
                 }
                 $outputStream.Flush($true)
-            } finally { $outputStream.Dispose(); $inputStream.Dispose() }
+            } finally {
+                $outputStream.Dispose(); $inputStream.Dispose()
+                if ($displayProgress) { Write-Progress -Id 1 -Activity 'Downloading Luminesk' -Completed -ErrorAction SilentlyContinue }
+            }
             return
         } finally { $response.Dispose() }
     }
@@ -144,6 +176,8 @@ function Test-Bundle([string]$Executable, [string]$Version) {
     & $Executable --help | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Bundle help smoke test failed' }
 }
+Write-Heading 'Luminesk installer'
+Write-Step 'Checking system and existing installation...'
 $rawArch = $env:PROCESSOR_ARCHITEW6432
 if (-not $rawArch) { $rawArch = $env:PROCESSOR_ARCHITECTURE }
 switch ($rawArch) { { $_ -in 'AMD64','x86_64','x64' } { $arch='amd64' }; default { throw "Unsupported architecture: $rawArch. Windows requires AMD64 (x64)." } }
@@ -183,6 +217,7 @@ try {
     if ($DeleteMode) {
         if (-not $owned) { Write-Host 'Luminesk is not installed.'; return }
         if (-not (Confirm-Action 'Remove the installer-owned application (keep instances and cache)?')) { return }
+        Write-Step 'Checking application use and ownership...'
         $versions = Join-Path $root 'versions'; Assert-NoLinks $versions
         $directories = @(Get-ChildItem -LiteralPath $versions -Directory -ErrorAction SilentlyContinue)
         foreach ($directory in $directories) {
@@ -203,6 +238,7 @@ try {
                 }
             }
         }
+        Write-Step 'Removing installer-owned application files...'
         foreach ($entry in @($launcher,$legacy)) { if ([IO.File]::Exists($entry)) { [IO.File]::Delete($entry) } }
         foreach ($directory in $directories) {
             $resolved = [IO.Path]::GetFullPath($directory.FullName)
@@ -210,12 +246,13 @@ try {
             Remove-Item -LiteralPath $resolved -Recurse -Force
         }
         [IO.File]::Delete($metadataPath)
-        Write-Host 'Luminesk uninstalled; instances and cache were preserved.'
+        Write-Success 'Luminesk uninstalled; instances and cache were preserved.'
         return
     }
     $work = Join-Path $root ('.stage.' + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($work) | Out-Null
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-Step 'Checking the latest release...'
     Receive-VerifiedHost 'https://api.github.com/repos/farin-works/luminesk-cli/releases/latest' "$work\release.json" 4194304
     $release = Get-Content -Raw -LiteralPath "$work\release.json" | ConvertFrom-Json
     if ($release.tag_name -notmatch '^v?(\d+\.\d+\.\d+(?:(?:a|b|rc)[1-9][0-9]*)?)$') { throw 'Invalid release version' }
@@ -227,12 +264,31 @@ try {
     if ($targetAsset.browser_download_url -cne $expectedUrl) { throw 'Release asset has an invalid download URL' }
     if ($targetAsset.digest -cnotmatch '^sha256:([0-9a-f]{64})$') { throw 'Release asset has no valid SHA-256 digest' }
     $expectedSha = $Matches[1]
-    if ($existing) { & $existing.Source --version; if ($LASTEXITCODE -ne 0) { throw 'Existing command failed' } }
+    $installed = 'Not installed'; $installStatus = 'New installation'
+    if ($existing) {
+        $installed = & $existing.Source --version
+        if ($LASTEXITCODE -ne 0) { throw 'Existing command failed' }
+        $localVersion = "$installed" -replace '^Luminesk ', ''
+        $installStatus = if ($localVersion -eq $version) { 'Up to date (reinstall)' } else { "Version change ($localVersion -> $version)" }
+    }
+    Write-Heading 'Installation summary'
+    Write-Detail 'System' "windows-$arch"
+    Write-Detail 'Installed' "$installed"
+    Write-Detail 'Latest release' $version
+    Write-Detail 'Status' $installStatus
+    Write-Detail 'Command' $launcher
+    Write-Host ''
     if (-not (Confirm-Action "Install Luminesk $version (windows-$arch)?")) { return }
-    Receive-VerifiedHost $expectedUrl "$work\bundle.zip" 536870912
+    Write-Step "Downloading Luminesk $version ($assetName)..."
+    Receive-VerifiedHost $expectedUrl "$work\bundle.zip" 536870912 -ShowProgress
+    Write-Step 'Verifying archive checksum...'
     if ((Get-Sha "$work\bundle.zip") -ne $expectedSha) { throw 'Checksum verification failed' }
+    Write-Success 'Archive checksum verified.'
+    Write-Step 'Extracting and verifying bundle files...'
     Expand-Bundle "$work\bundle.zip" $work
+    Write-Step 'Checking application imports, version and help...'
     Test-Bundle "$work\nesk\nesk.exe" $version
+    Write-Step 'Activating the verified application...'
     $versions = Join-Path $root 'versions'; Assert-NoLinks $versions
     [IO.Directory]::CreateDirectory($versions) | Out-Null
     $id = "$version-$([guid]::NewGuid().ToString('N'))"
@@ -269,16 +325,26 @@ try {
         & $launcher --version
         if ($LASTEXITCODE -ne 0) { throw 'Activated launcher smoke test failed' }
     } catch {
+        Write-InstallerLine 'Restoring the previous installation...' Yellow
         if ($migrated) { [IO.File]::Move("$destination\legacy-nesk.exe", $legacy) }
         if ($oldLauncher) { Write-Atomic $launcher $oldLauncher } elseif ([IO.File]::Exists($launcher)) { [IO.File]::Delete($launcher) }
         if ($oldMetadata) { Write-Atomic $metadataPath $oldMetadata } elseif ([IO.File]::Exists($metadataPath)) { [IO.File]::Delete($metadataPath) }
         throw
     }
+    Write-Step 'Configuring PATH...'
     $scope = if ($isAdmin) { 'Machine' } else { 'User' }
     $savedPath = [Environment]::GetEnvironmentVariable('Path', $scope)
     if ($bin -notin ($savedPath -split ';')) { [Environment]::SetEnvironmentVariable('Path', "$bin;$savedPath", $scope) }
     if ($bin -notin ($env:Path -split ';')) { $env:Path = "$bin;$env:Path" }
-    Write-Host "Luminesk $version installed. Previous versions retained for running processes."
+    Write-Success "Luminesk $version installed."
+    Write-Detail 'Command' $launcher
+    Write-InstallerLine '  Previous versions retained for running processes.'
+    Write-Heading 'Next steps'
+    Write-InstallerLine '  Check the installed version: nesk --version'
+    Write-InstallerLine '  Install and start Docker Desktop with Linux containers (WSL2).'
+    Write-InstallerLine "  Check Docker and Luminesk:`n    docker version`n    nesk doctor"
+    Write-InstallerLine "  Explore recipes and commands:`n    nesk catalog update`n    nesk --help"
+    Write-InstallerLine "`n  Installation and Docker guide: https://nesk.farin.cc/docs/installation"
 } finally {
     if ($work -and [IO.Directory]::Exists($work)) {
         $resolved = [IO.Path]::GetFullPath($work)

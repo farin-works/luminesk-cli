@@ -47,6 +47,14 @@ The installer:
   `prompt_toolkit`), version, and help before activating a new version;
 - refuses to overwrite a `nesk` owned by uv, pipx, or a manual installation.
 
+Before installing, it shows the installed and latest versions, platform, command
+path, and whether this is a new installation, a version change, or a reinstall.
+It reports download, verification, extraction, activation, and PATH setup stages.
+Terminals show download progress; redirected output keeps plain status lines.
+Colors respect `NO_COLOR` and `TERM=dumb`. A successful installation ends with
+the installed version and commands to check Docker and get started. These hints
+are printed only; the installer does not run Docker or install a server.
+
 In the Unix command, `--yes` is an installer option: piping occupies standard
 input, so the installer cannot ask its normal terminal question. This option
 approves only installing the Luminesk executable. It does not accept the
